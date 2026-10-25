@@ -1,4 +1,4 @@
-# MedKhata
+# Dawalekh (formerly MedKhata)
 
 Stock, expiry and refill tracking for medical stores and clinics in India.
 

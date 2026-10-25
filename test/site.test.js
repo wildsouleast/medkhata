@@ -36,7 +36,7 @@ test('local asset references resolve', () => {
 
 test('home page carries the core content', () => {
   const html = fs.readFileSync(path.join(PUB, 'index.html'), 'utf8');
-  for (const s of ['MedKhata', '2-day free trial', '₹299', '₹599', '₹999', 'Expiry alerts at 30, 60 and 90 days', 'Register vs Excel vs MedKhata', 'Privacy Policy', 'Terms of Service', 'Refund &amp; Cancellation', 'Contact us']) {
+  for (const s of ['Dawalekh', '2-day free trial', '₹299', '₹599', '₹999', 'Expiry alerts at 30, 60 and 90 days', 'Register vs Excel vs Dawalekh', 'Privacy Policy', 'Terms of Service', 'Refund &amp; Cancellation', 'Contact us']) {
     assert.ok(html.includes(s), `index missing ${s}`);
   }
 });

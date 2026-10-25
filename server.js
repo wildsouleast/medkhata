@@ -1,4 +1,4 @@
-// MedKhata server: marketing site, accounts, stock, alerts, reminders and Razorpay billing.
+// Dawalekh server: marketing site, accounts, stock, alerts, reminders and Razorpay billing.
 const path = require('path');
 const express = require('express');
 const { makePool, migrate } = require('./db');
@@ -156,7 +156,7 @@ app.get('/api/config', (req, res) => {
     trial_hours: TRIAL_HOURS,
     email_enabled: MAIL.enabled(),
     business: {
-      name: process.env.BUSINESS_NAME || 'MedKhata',
+      name: process.env.BRAND_NAME || 'Dawalekh',
       email: process.env.CONTACT_EMAIL || null,
       phone: process.env.CONTACT_PHONE || null,
       address: process.env.BUSINESS_ADDRESS || null,
@@ -172,7 +172,7 @@ app.get('/api/health', wrap(async (req, res) => {
 // ---------- auth ----------
 
 // ---------- email (welcome, verification, password reset) ----------
-const PUBLIC_BASE = () => process.env.PUBLIC_URL || 'https://medkhata.netlify.app';
+const PUBLIC_BASE = () => process.env.PUBLIC_URL || 'https://dawalekh.netlify.app';
 async function sendVerification(user, welcome) {
   if (!MAIL.enabled() || !user.email) return false;
   const token = A.newToken();
@@ -344,7 +344,7 @@ app.get('/api/medicines.csv', requireUser, requireAccess, wrap(async (req, res) 
   const lines = [['Medicine', 'Batch', 'Expiry', 'Days left', 'Quantity', 'Price (Rs)', 'Low-stock level', 'Supplier'].join(',')];
   r.rows.forEach((m) => lines.push([m.name, m.batch, m.expiry, m.days_left, m.qty, m.price, m.min_qty, m.supplier].map(csvCell).join(',')));
   res.set('Content-Type', 'text/csv; charset=utf-8');
-  res.set('Content-Disposition', 'attachment; filename="medkhata-stock.csv"');
+  res.set('Content-Disposition', 'attachment; filename="dawalekh-stock.csv"');
   res.send('\ufeff' + lines.join('\n'));
 }));
 
@@ -439,7 +439,7 @@ app.get('/api/reminders.csv', requireUser, requireAccess, wrap(async (req, res) 
   const lines = [['Patient', 'Mobile', 'Medicine', 'Every (days)', 'Next refill'].join(',')];
   q.rows.forEach((r) => lines.push([r.patient_name, r.phone, r.medicine, r.every_days, r.next_due].map(csvCell).join(',')));
   res.set('Content-Type', 'text/csv; charset=utf-8');
-  res.set('Content-Disposition', 'attachment; filename="medkhata-reminders.csv"');
+  res.set('Content-Disposition', 'attachment; filename="dawalekh-reminders.csv"');
   res.send('\ufeff' + lines.join('\n'));
 }));
 
@@ -556,7 +556,7 @@ app.post('/api/email/resend', requireUser, wrap(async (req, res) => {
 // With an email provider configured (lib/mailer.js), accounts with an email get the reset link by email automatically.
 // Otherwise (or for accounts without email) a reset works like this:
 // 1) the store asks on /forgot (saved as a request, same answer whether or not the account exists);
-// 2) the MedKhata team checks the request and creates a one-time link (admin key, valid 2 hours);
+// 2) the Dawalekh team checks the request and creates a one-time link (admin key, valid 2 hours);
 // 3) the team sends that link to the store's registered mobile on WhatsApp; the store sets a new password on /reset.
 app.post('/api/password/forgot', wrap(async (req, res) => {
   if (A.rateLimited(`forgot:${clientIp(req)}`, 5, 60 * 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Too many requests. Please try again later.' });
@@ -579,8 +579,8 @@ app.post('/api/password/forgot', wrap(async (req, res) => {
   }
   // Same answer whether or not the account exists (no account guessing).
   const msg = MAIL.enabled()
-    ? 'Request received. If an account exists with an email address, we have emailed it a reset link (valid 1 hour; check the spam folder too). Accounts without an email get the link from the MedKhata team on their registered mobile number on WhatsApp, usually within a few hours.'
-    : 'Request received. If an account exists for this number or email, the MedKhata team will send a reset link to your registered mobile number on WhatsApp, usually within a few hours.';
+    ? 'Request received. If an account exists with an email address, we have emailed it a reset link (valid 1 hour; check the spam folder too). Accounts without an email get the link from the Dawalekh team on their registered mobile number on WhatsApp, usually within a few hours.'
+    : 'Request received. If an account exists for this number or email, the Dawalekh team will send a reset link to your registered mobile number on WhatsApp, usually within a few hours.';
   res.json({ ok: true, message: msg });
 }));
 
@@ -596,7 +596,7 @@ app.post('/api/admin/reset-link', wrap(async (req, res) => {
   const token = A.newToken();
   await pool.query('DELETE FROM password_resets WHERE user_id=$1', [u.id]);
   await pool.query("INSERT INTO password_resets(token_hash, user_id, expires_at) VALUES ($1,$2, now() + interval '2 hours')", [A.tokenHash(token), u.id]);
-  const base = process.env.PUBLIC_URL || 'https://medkhata.netlify.app';
+  const base = process.env.PUBLIC_URL || 'https://dawalekh.netlify.app';
   res.json({ store_name: u.store_name, phone: u.phone, link: `${base}/reset?token=${token}`, expires_in_hours: 2 });
 }));
 
@@ -641,7 +641,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 const PORT = Number(process.env.PORT) || 3000;
 if (require.main === module) {
   migrate(pool).then(() => {
-    app.listen(PORT, () => console.log(`MedKhata listening on ${PORT}`));
+    app.listen(PORT, () => console.log(`Dawalekh listening on ${PORT}`));
   }).catch((e) => {
     console.error('Database setup failed:', e.message);
     process.exit(1);

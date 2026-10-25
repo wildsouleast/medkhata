@@ -1,4 +1,4 @@
-// MedKhata signup and login.
+// Dawalekh signup and login.
 (function () {
   function post(url, data) {
     return (window.mkWarm || Promise.resolve()).then(function () { return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })

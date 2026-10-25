@@ -1,4 +1,4 @@
-// MedKhata: forgot-password request and reset with a one-time link.
+// Dawalekh: forgot-password request and reset with a one-time link.
 (function () {
   function post(url, data) {
     return (window.mkWarm || Promise.resolve()).then(function () {

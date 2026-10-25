@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const PUB = path.join(__dirname, '..', 'public');
-const BASE = 'https://medkhata.netlify.app';
+const BASE = 'https://dawalekh.netlify.app';
 const read = (f) => fs.readFileSync(path.join(PUB, f), 'utf8');
 const indexable = ['index.html', 'pricing.html', 'about.html', 'contact.html', 'signup.html', 'privacy.html', 'terms.html', 'refund.html', 'shipping.html',
   'blog/index.html', 'blog/medical-store-expiry-dawai-kaise-track-karein.html', 'blog/pharmacy-stock-register-vs-app.html', 'blog/medical-store-kholne-ke-liye-licence-checklist.html'];

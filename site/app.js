@@ -1,4 +1,4 @@
-// MedKhata app: dashboard, stock, refill reminders and billing.
+// Dawalekh app: dashboard, stock, refill reminders and billing.
 (function () {
   'use strict';
   var state = { user: null, limits: null, config: null, meds: [], reminders: [], filter: 'all', tab: 'home', timer: null };
@@ -117,7 +117,7 @@
         '<div class="stat amber"><small>Low stock</small><strong>' + a.lowStock.length + '</strong></div>' +
         '<div class="stat green"><small>Refills due</small><strong>' + t.remindersDue + '</strong></div>';
       if (!t.medicines) {
-        $('alerts').innerHTML = '<div class="empty"><p><strong>Welcome to MedKhata!</strong></p><p>Add your first medicine to start getting expiry and low-stock alerts.</p><button class="btn btn-primary" type="button" data-add-med>+ Add your first medicine</button></div>';
+        $('alerts').innerHTML = '<div class="empty"><p><strong>Welcome to Dawalekh!</strong></p><p>Add your first medicine to start getting expiry and low-stock alerts.</p><button class="btn btn-primary" type="button" data-add-med>+ Add your first medicine</button></div>';
         return;
       }
       $('alerts').innerHTML =
@@ -284,7 +284,7 @@
       var o = res[1];
       var rzp = new window.Razorpay({
         key: o.key_id, amount: o.amount, currency: o.currency, order_id: o.order_id,
-        name: 'MedKhata', description: o.plan.name + ' plan · 30 days',
+        name: 'Dawalekh', description: o.plan.name + ' plan · 30 days',
         prefill: o.prefill, notes: { plan: o.plan.id }, theme: { color: '#0f766e' },
         handler: function (resp) {
           btn.textContent = 'Confirming…';

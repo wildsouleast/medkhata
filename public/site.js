@@ -13,7 +13,7 @@ window.mkWarm = (function () {
   }
   return ping();
 })();
-// MedKhata marketing pages: menu, business details, contact form.
+// Dawalekh marketing pages: menu, business details, contact form.
 (function () {
   var btn = document.querySelector('.menu-btn');
   var links = document.getElementById('nav-links');

@@ -1,6 +1,6 @@
 {
-  "name": "MedKhata",
-  "site_url": "https://medkhata.netlify.app",
-  "indexing": false,
+  "name": "Dawalekh",
+  "site_url": "https://dawalekh.netlify.app",
+  "indexing": true,
   "_note": "indexing=false keeps every page noindex until the rename is final. Change name/site_url with: node scripts/rebrand.js \"New Name\" https://new-domain.com ; then node scripts/set-indexing.js on"
 }
