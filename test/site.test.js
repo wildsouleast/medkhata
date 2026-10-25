@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PUB = path.join(__dirname, '..', 'public');
-const pages = fs.readdirSync(PUB).filter((f) => f.endsWith('.html'));
+const pages = fs.readdirSync(PUB).filter((f) => f.endsWith('.html') && !/^google[0-9a-f]+\.html$/.test(f));
 
 test('all required pages exist', () => {
   for (const p of ['index.html', 'pricing.html', 'signup.html', 'login.html', 'app.html', 'contact.html', 'about.html', 'privacy.html', 'terms.html', 'refund.html', 'shipping.html', '404.html']) {

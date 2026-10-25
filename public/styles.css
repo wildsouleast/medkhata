@@ -287,3 +287,32 @@ dialog::backdrop{background:rgba(15,23,42,.5)}
 .stat-note{display:block;color:var(--mut);font-size:.72rem;margin-top:2px}
 .b-red{color:#b91c1c}
 .plans .card h2.plan-name{font-size:1.15rem;font-weight:700;margin-bottom:6px}
+
+/* blog */
+.article{max-width:760px;margin:0 auto;padding:36px 20px 56px}
+.article h1{font-size:clamp(1.7rem,4.5vw,2.4rem);line-height:1.2;letter-spacing:-.02em;margin:.2em 0 .4em}
+.article h2{font-size:1.35rem;margin:1.8em 0 .5em;line-height:1.3}
+.article h3{font-size:1.1rem;margin:1.4em 0 .4em}
+.article p,.article li{color:var(--ink-2);font-size:1.05rem}
+.article ul,.article ol{padding-left:1.3em}
+.article li{margin:.35em 0}
+.article .meta{color:var(--mut);font-size:.9rem}
+.article .note{background:var(--amber-l);border-left:4px solid var(--amber);padding:12px 16px;border-radius:8px;color:var(--ink-2)}
+.article .tip{background:var(--brand-xl);border-left:4px solid var(--brand);padding:12px 16px;border-radius:8px}
+.article table{width:100%;border-collapse:collapse;margin:1em 0;font-size:.95rem;display:block;overflow-x:auto}
+.article th,.article td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+.article th{background:var(--brand-xl)}
+.crumbs{font-size:.88rem;color:var(--mut)}.crumbs a{color:var(--mut)}
+.post-list{display:grid;gap:16px;margin-top:20px}
+.post-list .card h2{font-size:1.2rem;margin:0 0 6px}.post-list .card h2 a{color:var(--ink);text-decoration:none}.post-list .card h2 a:hover{color:var(--brand-d)}
+.art-cta{margin-top:2.2em;padding:20px;border-radius:var(--r);background:#fff;border:1px solid var(--line)}
+
+/* Desktop pass Oct 25: compact rows and two columns on wide screens */
+@media (min-width:1024px){
+  .item{align-items:center;padding:14px 16px}
+  .item .side{flex-direction:row;align-items:center;flex-wrap:wrap;justify-content:flex-end;max-width:55%}
+  .list{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .toolbar input{max-width:520px}
+  .stat strong{font-size:1.7rem}
+}
+@media (min-width:1400px){.app-body .wrap,.app-body .tabs{max-width:1320px}}
