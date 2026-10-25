@@ -223,6 +223,12 @@ app.post('/api/logout', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Quiet check used by the login/signup pages (always 200, so no error in the browser console).
+app.get('/api/session', wrap(async (req, res) => {
+  const u = await loadUser(req);
+  res.json({ logged_in: Boolean(u) });
+}));
+
 app.get('/api/me', requireUser, (req, res) => {
   res.json({ user: publicUser(req.user), limits: effectiveLimits(req.user) });
 });

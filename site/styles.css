@@ -176,7 +176,7 @@ table{border-collapse:collapse;width:100%}
 .site-footer{background:#0b1220;color:#cbd5e1;padding:56px 0 28px;margin-top:0}
 .site-footer a{color:#cbd5e1;text-decoration:none}.site-footer a:hover{color:#fff;text-decoration:underline}
 .foot-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:32px}
-.foot-grid h4{color:#fff;font-size:.9rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.foot-grid h4,.foot-grid .foot-h{color:#fff;font-size:.9rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
 .foot-grid ul{list-style:none;padding:0;margin:0;display:grid;gap:8px}
 .site-footer .logo{color:#fff}
 .foot-bottom{border-top:1px solid #1e293b;margin-top:40px;padding-top:20px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:.875rem;color:#94a3b8}
@@ -285,3 +285,5 @@ dialog::backdrop{background:rgba(15,23,42,.5)}
   .item .side .btn{margin-left:auto}
 }
 .stat-note{display:block;color:var(--mut);font-size:.72rem;margin-top:2px}
+.b-red{color:#b91c1c}
+.plans .card h2.plan-name{font-size:1.15rem;font-weight:700;margin-bottom:6px}

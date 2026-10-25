@@ -12,7 +12,7 @@
   function stopSlowNote(errBox) { clearTimeout(slow); errBox.className = 'alert alert-error'; errBox.hidden = true; }
 
   // Already logged in? Go straight to the app.
-  (window.mkWarm || Promise.resolve()).then(function () { return fetch('/api/me', { credentials: 'same-origin' }); }).then(function (r) { if (r.ok) location.replace('/app'); }).catch(function () {});
+  (window.mkWarm || Promise.resolve()).then(function () { return fetch('/api/session', { credentials: 'same-origin' }); }).then(function (r) { return r.ok ? r.json() : {}; }).then(function (j) { if (j && j.logged_in) location.replace('/app'); }).catch(function () {});
 
   var signup = document.getElementById('signup-form');
   if (signup) {
