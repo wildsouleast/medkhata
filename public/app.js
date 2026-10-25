@@ -62,6 +62,16 @@
     if (h >= 24) return '1 day ' + (h - 24) + ' hrs ' + m + ' min';
     return h + ' hrs ' + m + ' min';
   }
+  function renderEmailNote() {
+    var el = $('email-note'), u = state.user;
+    if (!el || !u || !u.email || u.email_verified || !(state.config && state.config.email_enabled)) { if (el) el.hidden = true; return; }
+    el.hidden = false;
+    el.innerHTML = '<span>📧 Please confirm your email <strong>' + esc(u.email) + '</strong>. We sent you a link.</span><button class="btn btn-ghost btn-sm" type="button" id="resend-verify">Send again</button>';
+    $('resend-verify').addEventListener('click', function () {
+      var b = this; b.disabled = true;
+      api('POST', '/api/email/resend').then(function (r) { toast(r.message || 'Email sent'); }).catch(function (x) { toast(x.message); b.disabled = false; });
+    });
+  }
   function renderStatus() {
     var el = $('status'); var s = state.user && state.user.status; if (!s) return;
     el.hidden = false;
@@ -343,7 +353,7 @@
 
   // ---------- start ----------
   waitForServer().then(function () { return Promise.all([api('GET', '/api/me'), fetch('/api/config').then(function (r) { return r.json(); })]).then(function (res) {
-    state.user = res[0].user; state.limits = res[0].limits; state.config = res[1];
+    state.user = res[0].user; state.limits = res[0].limits; state.config = res[1]; renderEmailNote();
     $('loading').hidden = true;
     $('store-name').textContent = state.user.store_name;
     if (!state.limits.csvExport) { $('csv-stock').setAttribute('aria-disabled', 'true'); $('csv-stock').dataset.reason = 'CSV download is part of the Pro and Clinic+ plans.'; }

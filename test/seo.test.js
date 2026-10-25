@@ -44,7 +44,8 @@ test('sitemap lists every indexable page and robots points to it', () => {
     assert.ok(sm.includes(`<loc>${BASE}${u}</loc>`), `sitemap missing ${u}`);
     const p = path.join(PUB, f); assert.ok(fs.existsSync(p), `file ${f}`);
   }
-  assert.match(read('robots.txt'), /Sitemap: https:\/\/medkhata\.netlify\.app\/sitemap\.xml/);
+  const brand = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'brand.json'), 'utf8'));
+  if (brand.indexing) assert.match(read('robots.txt'), /Sitemap: /); else assert.doesNotMatch(read('robots.txt'), /Sitemap: /);
   assert.ok(fs.existsSync(path.join(PUB, 'googlec9735b214ab7d95c.html')), 'Search Console verification file must stay');
 });
 
@@ -55,4 +56,11 @@ test('blog articles are substantial and link to signup', () => {
     assert.ok(h.includes('href="/signup"'), `${f} signup link`);
     assert.match(h, /"@type":\s*"Article"/, `${f} Article schema`);
   }
+});
+
+test('while brand.indexing is false, every page is noindex (old name stays out of Google)', () => {
+  const brand = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'brand.json'), 'utf8'));
+  if (brand.indexing) return;
+  for (const f of indexable) assert.match(read(f), /<meta name="robots" content="noindex">/, f);
+  assert.match(read('_headers'), /X-Robots-Tag: noindex/);
 });

@@ -4,6 +4,7 @@ const express = require('express');
 const { makePool, migrate } = require('./db');
 const A = require('./lib/auth');
 const RZ = require('./lib/razorpay');
+const MAIL = require('./lib/mailer');
 const { PLANS, TRIAL_HOURS, PERIOD_DAYS, limitsFor } = require('./lib/plans');
 
 const app = express();
@@ -102,7 +103,7 @@ function effectiveLimits(u) {
 }
 
 function publicUser(u) {
-  return { id: u.id, store_name: u.store_name, owner_name: u.owner_name, phone: u.phone, email: u.email, city: u.city, created_at: u.created_at, status: accountStatus(u) };
+  return { id: u.id, store_name: u.store_name, owner_name: u.owner_name, phone: u.phone, email: u.email, email_verified: Boolean(u.email && u.email_verified_at), city: u.city, created_at: u.created_at, status: accountStatus(u) };
 }
 
 async function loadUser(req) {
@@ -153,6 +154,7 @@ app.get('/api/config', (req, res) => {
     payments: { enabled: c.enabled, test_mode: c.enabled && !c.liveMode, key_id: c.enabled ? c.keyId : null },
     plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, features: p.features })),
     trial_hours: TRIAL_HOURS,
+    email_enabled: MAIL.enabled(),
     business: {
       name: process.env.BUSINESS_NAME || 'MedKhata',
       email: process.env.CONTACT_EMAIL || null,
@@ -168,6 +170,20 @@ app.get('/api/health', wrap(async (req, res) => {
 }));
 
 // ---------- auth ----------
+
+// ---------- email (welcome, verification, password reset) ----------
+const PUBLIC_BASE = () => process.env.PUBLIC_URL || 'https://medkhata.netlify.app';
+async function sendVerification(user, welcome) {
+  if (!MAIL.enabled() || !user.email) return false;
+  const token = A.newToken();
+  await pool.query('DELETE FROM email_verifications WHERE user_id=$1', [user.id]);
+  await pool.query("INSERT INTO email_verifications(token_hash, user_id, email, expires_at) VALUES ($1,$2,$3, now() + interval '48 hours')", [A.tokenHash(token), user.id, user.email]);
+  const link = `${PUBLIC_BASE()}/verify-email?token=${token}`;
+  const m = welcome ? MAIL.welcomeVerify({ store: user.store_name, link }) : MAIL.verifyOnly({ link });
+  const r = await MAIL.send({ to: user.email, ...m });
+  return r.ok;
+}
+
 app.post('/api/signup', wrap(async (req, res) => {
   if (A.rateLimited(`signup:${clientIp(req)}`, 20, 60 * 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Too many attempts. Please try again in a while.' });
   const b = req.body || {};
@@ -192,7 +208,9 @@ app.post('/api/signup', wrap(async (req, res) => {
     [store, owner, phone, email || null, city, hash, String(TRIAL_HOURS)]
   );
   await startSession(res, r.rows[0].id);
-  res.status(201).json({ user: publicUser(r.rows[0]) });
+  let emailSent = false;
+  if (r.rows[0].email) emailSent = await sendVerification(r.rows[0], true).catch((e) => { console.error('[mail] signup', e.message); return false; });
+  res.status(201).json({ user: publicUser(r.rows[0]), email_sent: emailSent });
 }));
 
 app.post('/api/login', wrap(async (req, res) => {
@@ -514,8 +532,29 @@ function adminOk(req) {
   return require('crypto').timingSafeEqual(Buffer.from(A.tokenHash(given)), Buffer.from(A.tokenHash(key)));
 }
 
+
+app.post('/api/email/verify', wrap(async (req, res) => {
+  if (A.rateLimited(`verify:${clientIp(req)}`, 20, 60 * 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Too many attempts. Please try again later.' });
+  const r = await pool.query('DELETE FROM email_verifications WHERE token_hash=$1 AND expires_at > now() RETURNING user_id, email', [A.tokenHash(String((req.body || {}).token || ''))]);
+  if (!r.rowCount) return res.status(400).json({ error: 'bad_token', message: 'This link is invalid or has expired. Log in and ask for a new confirmation email.' });
+  const u = await pool.query('UPDATE users SET email_verified_at=now() WHERE id=$1 AND email=$2 RETURNING id', [r.rows[0].user_id, r.rows[0].email]);
+  if (!u.rowCount) return res.status(400).json({ error: 'bad_token', message: 'This link is for an old email address. Log in and ask for a new confirmation email.' });
+  res.json({ ok: true, message: 'Email confirmed. Thank you!' });
+}));
+
+app.post('/api/email/resend', requireUser, wrap(async (req, res) => {
+  if (!MAIL.enabled()) return res.status(503).json({ error: 'email_off', message: 'Email is not available right now.' });
+  if (!req.user.email) return bad(res, 'No email address is saved on this account.');
+  if (req.user.email_verified_at) return res.json({ ok: true, message: 'Your email is already confirmed.' });
+  if (A.rateLimited(`resend:${req.user.id}`, 3, 60 * 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Please wait a while before asking for another email.' });
+  const ok = await sendVerification(req.user, false);
+  if (!ok) return res.status(502).json({ error: 'send_failed', message: 'Could not send the email right now. Please try again later.' });
+  res.json({ ok: true, message: `Confirmation email sent to ${req.user.email}. Check your inbox (and spam folder).` });
+}));
+
 // ---------- forgot / reset password ----------
-// No email or SMS service is connected, so a reset works like this:
+// With an email provider configured (lib/mailer.js), accounts with an email get the reset link by email automatically.
+// Otherwise (or for accounts without email) a reset works like this:
 // 1) the store asks on /forgot (saved as a request, same answer whether or not the account exists);
 // 2) the MedKhata team checks the request and creates a one-time link (admin key, valid 2 hours);
 // 3) the team sends that link to the store's registered mobile on WhatsApp; the store sets a new password on /reset.
@@ -525,11 +564,24 @@ app.post('/api/password/forgot', wrap(async (req, res) => {
   const phone = A.normalizePhone(id);
   const email = A.normalizeEmail(id);
   if (!phone && !email) return bad(res, 'Please enter the mobile number or email you signed up with.', 'login');
-  const r = phone ? await pool.query('SELECT id FROM users WHERE phone=$1', [phone]) : await pool.query('SELECT id FROM users WHERE email=$1', [email]);
-  if (r.rowCount) {
-    await pool.query('INSERT INTO contact_messages(name, contact, message) VALUES ($1,$2,$3)', ['Password reset request', phone || email, `User #${r.rows[0].id} asked to reset their password.`]);
+  const r = phone ? await pool.query('SELECT id, email FROM users WHERE phone=$1', [phone]) : await pool.query('SELECT id, email FROM users WHERE email=$1', [email]);
+  const u = r.rows[0];
+  let emailed = false;
+  if (u && u.email && MAIL.enabled() && !A.rateLimited(`forgotmail:${u.id}`, 3, 60 * 60 * 1000)) {
+    const token = A.newToken();
+    await pool.query('DELETE FROM password_resets WHERE user_id=$1', [u.id]);
+    await pool.query("INSERT INTO password_resets(token_hash, user_id, expires_at) VALUES ($1,$2, now() + interval '1 hour')", [A.tokenHash(token), u.id]);
+    const m = MAIL.resetMail({ link: `${PUBLIC_BASE()}/reset?token=${token}` });
+    emailed = (await MAIL.send({ to: u.email, ...m })).ok;
   }
-  res.json({ ok: true, message: 'Request received. If an account exists for this number or email, the MedKhata team will send a reset link to your registered mobile number on WhatsApp, usually within a few hours.' });
+  if (u && !emailed) {
+    await pool.query('INSERT INTO contact_messages(name, contact, message) VALUES ($1,$2,$3)', ['Password reset request', phone || email, `User #${u.id} asked to reset their password.`]);
+  }
+  // Same answer whether or not the account exists (no account guessing).
+  const msg = MAIL.enabled()
+    ? 'Request received. If an account exists with an email address, we have emailed it a reset link (valid 1 hour; check the spam folder too). Accounts without an email get the link from the MedKhata team on their registered mobile number on WhatsApp, usually within a few hours.'
+    : 'Request received. If an account exists for this number or email, the MedKhata team will send a reset link to your registered mobile number on WhatsApp, usually within a few hours.';
+  res.json({ ok: true, message: msg });
 }));
 
 app.post('/api/admin/reset-link', wrap(async (req, res) => {

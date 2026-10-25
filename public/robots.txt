@@ -2,7 +2,3 @@ User-agent: *
 Allow: /
 Disallow: /app
 Disallow: /api/
-Disallow: /reset
-Disallow: /forgot
-
-Sitemap: https://medkhata.netlify.app/sitemap.xml
