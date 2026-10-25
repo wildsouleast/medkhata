@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Start free trial — MedKhata</title>
+<meta name="description" content="Create your MedKhata account and start a 2-day free trial. No card needed.">
+<meta name="theme-color" content="#0f766e">
+<meta property="og:title" content="Start free trial — MedKhata">
+<meta property="og:description" content="Create your MedKhata account and start a 2-day free trial. No card needed.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="/og.png">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+<script src="/site.js" defer></script><script src="/auth.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="logo" href="/" aria-label="MedKhata home"><svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#0f766e"/><path d="M26 14h12v12h12v12H38v12H26V38H14V26h12z" fill="#fff"/></svg><span>Med<b>Khata</b></span></a>
+    <nav class="nav-links" id="nav-links" aria-label="Main"><a href="/#features">Features</a><a href="/pricing">Pricing</a><a href="/#faq">FAQ</a><a href="/about">About</a><a href="/contact">Contact</a><a class="mobile-only" href="/login">Log in</a></nav>
+    <div class="nav-cta"><a class="btn btn-ghost btn-sm" href="/login">Log in</a><a class="btn btn-primary btn-sm" href="/signup">Start free trial</a></div>
+    <button class="menu-btn" type="button" aria-controls="nav-links" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<main id="main">
+<div class="auth"><div class="card">
+  <h1>Start your free trial</h1>
+  <div class="trial-pill">⏳ 2 days free, all features. No card needed.</div>
+  <form class="form" id="signup-form" novalidate>
+    <div class="field"><label for="s-store">Store name</label><input id="s-store" name="store_name" autocomplete="organization" required maxlength="80" placeholder="e.g. Sharma Medical Hall"></div>
+    <div class="row2">
+      <div class="field"><label for="s-owner">Owner name</label><input id="s-owner" name="owner_name" autocomplete="name" required maxlength="60"></div>
+      <div class="field"><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" required maxlength="60"></div>
+    </div>
+    <div class="field"><label for="s-phone">Mobile number</label><input id="s-phone" name="phone" type="tel" inputmode="numeric" autocomplete="tel-national" required maxlength="14" placeholder="10-digit mobile number"><div class="hint">You will use this number to log in.</div></div>
+    <div class="field"><label for="s-email">Email <span class="muted">(optional)</span></label><input id="s-email" name="email" type="email" autocomplete="email" maxlength="120"></div>
+    <div class="field"><label for="s-pass">Create password</label><div class="pw"><input id="s-pass" name="password" type="password" autocomplete="new-password" required minlength="8"><button type="button" data-toggle-pw="s-pass">Show</button></div><div class="hint">At least 8 characters.</div></div>
+    <label class="check"><input type="checkbox" id="s-terms" name="accept_terms"> <span>I agree to the <a href="/terms" target="_blank">Terms of Service</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.</span></label>
+    <div class="alert alert-error" id="s-err" role="alert" hidden></div>
+    <button class="btn btn-primary btn-block" type="submit">Start free trial</button>
+  </form>
+  <p class="center small" style="margin:18px 0 0">Already have an account? <a href="/login">Log in</a></p>
+</div></div>
+</main>
+
+</body>
+</html>
