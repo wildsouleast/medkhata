@@ -103,7 +103,7 @@ function effectiveLimits(u) {
 }
 
 function publicUser(u) {
-  return { id: u.id, store_name: u.store_name, owner_name: u.owner_name, phone: u.phone, email: u.email, email_verified: Boolean(u.email && u.email_verified_at), city: u.city, created_at: u.created_at, status: accountStatus(u) };
+  return { id: u.id, store_name: u.store_name, owner_name: u.owner_name, phone: u.phone, email: u.email, email_verified: Boolean(u.email && u.email_verified_at), city: u.city, store_address: u.store_address || '', gstin: u.gstin || '', drug_licence: u.drug_licence || '', created_at: u.created_at, status: accountStatus(u) };
 }
 
 async function loadUser(req) {
@@ -257,7 +257,12 @@ app.put('/api/me', requireUser, wrap(async (req, res) => {
   const owner = str(b.owner_name, 60);
   const city = str(b.city, 60);
   if (store.length < 2 || owner.length < 2 || city.length < 2) return bad(res, 'Store name, owner name and city are required.');
-  const r = await pool.query('UPDATE users SET store_name=$1, owner_name=$2, city=$3 WHERE id=$4 RETURNING *', [store, owner, city, req.user.id]);
+  // Bill header details (optional). A field left out of the request keeps its saved value.
+  const address = b.store_address === undefined ? (req.user.store_address || '') : str(b.store_address, 200);
+  const gstin = b.gstin === undefined ? (req.user.gstin || '') : str(b.gstin, 20).toUpperCase();
+  const licence = b.drug_licence === undefined ? (req.user.drug_licence || '') : str(b.drug_licence, 120);
+  if (gstin && !/^[0-9A-Z]{15}$/.test(gstin)) return bad(res, 'GSTIN should be 15 letters/numbers (e.g. 10ABCDE1234F1Z5). Leave it empty if you do not have one.', 'gstin');
+  const r = await pool.query('UPDATE users SET store_name=$1, owner_name=$2, city=$3, store_address=$4, gstin=$5, drug_licence=$6 WHERE id=$7 RETURNING *', [store, owner, city, address, gstin, licence, req.user.id]);
   res.json({ user: publicUser(r.rows[0]) });
 }));
 
@@ -368,6 +373,143 @@ app.get('/api/alerts', requireUser, requireAccess, wrap(async (req, res) => {
       remindersDue: rem.rows[0].n,
     },
   });
+}));
+
+// ---------- customer bills ----------
+// Available in every plan, including the free trial (requireAccess only blocks expired accounts).
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const BILL_COLS = "b.id, b.bill_no, b.customer_name, b.customer_phone, b.subtotal::float AS subtotal, b.discount_type, b.discount_value::float AS discount_value, b.discount_amount::float AS discount_amount, b.gst_percent::float AS gst_percent, b.gst_mode, b.gst_amount::float AS gst_amount, b.total::float AS total, b.created_at";
+
+function cleanPhone(v) {
+  let d = String(v == null ? '' : v).replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return d;
+}
+
+function istDate(offsetDays) {
+  const d = new Date(Date.now() + 5.5 * 3600e3 + (offsetDays || 0) * 864e5);
+  return d.toISOString().slice(0, 10);
+}
+
+app.get('/api/bills', requireUser, requireAccess, wrap(async (req, res) => {
+  const from = isDate(req.query.from) ? req.query.from : istDate(0);
+  const to = isDate(req.query.to) ? req.query.to : from;
+  if (to < from) return bad(res, 'The "to" date is before the "from" date.');
+  const q = await pool.query(
+    `SELECT ${BILL_COLS}, (SELECT count(*)::int FROM bill_items i WHERE i.bill_id=b.id) AS item_count
+       FROM bills b WHERE b.user_id=$1 AND (b.created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $2 AND $3
+       ORDER BY b.created_at DESC LIMIT 500`, [req.user.id, from, to]);
+  const sum = await pool.query(
+    `SELECT count(*)::int AS count, COALESCE(sum(total),0)::float AS total FROM bills
+      WHERE user_id=$1 AND (created_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $2 AND $3`, [req.user.id, from, to]);
+  const today = await pool.query(
+    `SELECT count(*)::int AS count, COALESCE(sum(total),0)::float AS total FROM bills
+      WHERE user_id=$1 AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = $2`, [req.user.id, istDate(0)]);
+  res.json({ from, to, bills: q.rows, summary: sum.rows[0], today: today.rows[0] });
+}));
+
+app.get('/api/bills/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const b = await pool.query(`SELECT ${BILL_COLS} FROM bills b WHERE b.id=$1 AND b.user_id=$2`, [Number(req.params.id) || 0, req.user.id]);
+  if (!b.rowCount) return res.status(404).json({ error: 'not_found', message: 'Bill not found.' });
+  const items = await pool.query("SELECT id, medicine_id, name, batch, to_char(expiry,'YYYY-MM-DD') AS expiry, qty, price::float AS price, amount::float AS amount FROM bill_items WHERE bill_id=$1 ORDER BY id", [b.rows[0].id]);
+  res.json({ bill: { ...b.rows[0], items: items.rows } });
+}));
+
+app.post('/api/bills', requireUser, requireAccess, wrap(async (req, res) => {
+  const body = req.body || {};
+  const customerName = str(body.customer_name, 80);
+  const customerPhone = cleanPhone(body.customer_phone);
+  if (customerPhone && !/^[6-9]\d{9}$/.test(customerPhone)) return bad(res, 'Customer mobile number should be 10 digits (or leave it empty).', 'customer_phone');
+  const raw = Array.isArray(body.items) ? body.items : [];
+  if (!raw.length) return bad(res, 'Add at least one medicine to the bill.');
+  if (raw.length > 100) return bad(res, 'A bill can have up to 100 lines.');
+  const lines = [];
+  for (const it of raw) {
+    const id = Number(it && it.medicine_id), qty = Number(it && it.qty), price = Number(it && it.price);
+    if (!Number.isInteger(id) || id <= 0) return bad(res, 'Please pick each medicine from your stock.');
+    if (!Number.isInteger(qty) || qty < 1 || qty > 100000) return bad(res, 'Quantity must be a whole number (1 or more).');
+    if (!Number.isFinite(price) || price < 0 || price > 10000000) return bad(res, 'Please enter a valid price.');
+    lines.push({ id, qty, price: round2(price) });
+  }
+  const dType = body.discount_type === 'percent' ? 'percent' : 'amount';
+  const dValue = body.discount_value === '' || body.discount_value == null ? 0 : Number(body.discount_value);
+  if (!Number.isFinite(dValue) || dValue < 0 || (dType === 'percent' && dValue > 100)) return bad(res, 'Please enter a valid discount.');
+  const gstMode = ['incl', 'excl'].includes(body.gst_mode) ? body.gst_mode : 'none';
+  const gstPct = gstMode === 'none' ? 0 : Number(body.gst_percent);
+  if (!Number.isFinite(gstPct) || gstPct < 0 || gstPct > 28) return bad(res, 'GST % should be between 0 and 28.');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Lock the store row so bill numbers stay in order, then the medicines being sold.
+    await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
+    const ids = [...new Set(lines.map((l) => l.id))];
+    const mq = await client.query(`SELECT ${MED_COLS} FROM medicines WHERE user_id=$1 AND id = ANY($2::int[]) FOR UPDATE`, [req.user.id, ids]);
+    const meds = new Map(mq.rows.map((m) => [m.id, m]));
+    const want = new Map();
+    for (const l of lines) {
+      const m = meds.get(l.id);
+      if (!m) { await client.query('ROLLBACK'); return bad(res, 'A medicine on this bill is no longer in your stock. Please remove it and try again.'); }
+      if (m.days_left < 0) { await client.query('ROLLBACK'); return bad(res, `${m.name}${m.batch ? ' (batch ' + m.batch + ')' : ''} has expired. Expired medicine cannot be billed.`); }
+      want.set(l.id, (want.get(l.id) || 0) + l.qty);
+    }
+    for (const [id, q] of want) {
+      const m = meds.get(id);
+      if (q > m.qty) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'not_enough_stock', medicine_id: id, available: m.qty, message: `Only ${m.qty} of ${m.name}${m.batch ? ' (batch ' + m.batch + ')' : ''} in stock. You asked for ${q}.` });
+      }
+    }
+    const subtotal = round2(lines.reduce((s, l) => s + round2(l.qty * l.price), 0));
+    let discount = dType === 'percent' ? round2(subtotal * dValue / 100) : round2(dValue);
+    if (discount > subtotal) { await client.query('ROLLBACK'); return bad(res, 'Discount cannot be more than the bill amount.'); }
+    const taxable = round2(subtotal - discount);
+    let gst = 0, total = taxable;
+    if (gstMode === 'incl') gst = round2(taxable - taxable / (1 + gstPct / 100));
+    if (gstMode === 'excl') { gst = round2(taxable * gstPct / 100); total = round2(taxable + gst); }
+    const no = await client.query('SELECT COALESCE(max(bill_no),0)+1 AS n FROM bills WHERE user_id=$1', [req.user.id]);
+    const bill = await client.query(
+      `INSERT INTO bills(user_id, bill_no, customer_name, customer_phone, subtotal, discount_type, discount_value, discount_amount, gst_percent, gst_mode, gst_amount, total)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      [req.user.id, no.rows[0].n, customerName, customerPhone, subtotal, dType, round2(dValue), discount, gstPct, gstMode, gst, total]);
+    const billId = bill.rows[0].id;
+    for (const l of lines) {
+      const m = meds.get(l.id);
+      await client.query('INSERT INTO bill_items(bill_id, medicine_id, name, batch, expiry, qty, price, amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [billId, m.id, m.name, m.batch, m.expiry, l.qty, l.price, round2(l.qty * l.price)]);
+    }
+    for (const [id, q] of want) await client.query('UPDATE medicines SET qty=qty-$1, updated_at=now() WHERE id=$2 AND user_id=$3', [q, id, req.user.id]);
+    await client.query('COMMIT');
+    const b = await pool.query(`SELECT ${BILL_COLS} FROM bills b WHERE b.id=$1`, [billId]);
+    const items = await pool.query("SELECT id, medicine_id, name, batch, to_char(expiry,'YYYY-MM-DD') AS expiry, qty, price::float AS price, amount::float AS amount FROM bill_items WHERE bill_id=$1 ORDER BY id", [billId]);
+    res.status(201).json({ bill: { ...b.rows[0], items: items.rows } });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}));
+
+// Cancel a bill: the sold quantity goes back into stock (if the medicine still exists).
+app.delete('/api/bills/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const b = await client.query('SELECT id FROM bills WHERE id=$1 AND user_id=$2 FOR UPDATE', [Number(req.params.id) || 0, req.user.id]);
+    if (!b.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'not_found', message: 'Bill not found.' }); }
+    const items = await client.query('SELECT medicine_id, qty FROM bill_items WHERE bill_id=$1 AND medicine_id IS NOT NULL', [b.rows[0].id]);
+    for (const it of items.rows) await client.query('UPDATE medicines SET qty=qty+$1, updated_at=now() WHERE id=$2 AND user_id=$3', [it.qty, it.medicine_id, req.user.id]);
+    await client.query('DELETE FROM bills WHERE id=$1', [b.rows[0].id]);
+    await client.query('COMMIT');
+    res.json({ ok: true, restored: items.rowCount });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }));
 
 // ---------- refill reminders ----------

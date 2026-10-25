@@ -97,6 +97,39 @@ CREATE TABLE IF NOT EXISTS contact_messages (
   message TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS store_address TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS gstin TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS drug_licence TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS bills (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  bill_no INTEGER NOT NULL,
+  customer_name TEXT NOT NULL DEFAULT '',
+  customer_phone TEXT NOT NULL DEFAULT '',
+  subtotal NUMERIC(12,2) NOT NULL DEFAULT 0,
+  discount_type TEXT NOT NULL DEFAULT 'amount',
+  discount_value NUMERIC(12,2) NOT NULL DEFAULT 0,
+  discount_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  gst_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
+  gst_mode TEXT NOT NULL DEFAULT 'none',
+  gst_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  total NUMERIC(12,2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, bill_no)
+);
+CREATE INDEX IF NOT EXISTS bills_user_date_idx ON bills(user_id, created_at);
+CREATE TABLE IF NOT EXISTS bill_items (
+  id SERIAL PRIMARY KEY,
+  bill_id INTEGER NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+  medicine_id INTEGER REFERENCES medicines(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  batch TEXT NOT NULL DEFAULT '',
+  expiry DATE,
+  qty INTEGER NOT NULL,
+  price NUMERIC(10,2) NOT NULL,
+  amount NUMERIC(12,2) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bill_items_bill_idx ON bill_items(bill_id);
 `;
 
 async function migrate(pool) {

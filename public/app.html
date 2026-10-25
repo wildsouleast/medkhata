@@ -18,6 +18,7 @@
 </div></header>
 <div class="tabs-wrap"><nav class="tabs" role="tablist" aria-label="App sections">
   <button role="tab" data-tab="home" aria-selected="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span>Home</span></button>
+  <button role="tab" data-tab="bills" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg><span>Bills</span></button>
   <button role="tab" data-tab="stock" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span>Stock</span></button>
   <button role="tab" data-tab="refills" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 01-9 8.4 8.6 8.6 0 01-4-1L3 20l1.2-4.5A8.4 8.4 0 1121 11.5z"/></svg><span>Refills</span></button>
   <button role="tab" data-tab="plan" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg><span>Plan</span></button>
@@ -28,9 +29,56 @@
   <div id="loading" class="loading">Loading your store… (the first load can take up to a minute)</div>
 
   <section class="panel" id="tab-home" role="tabpanel" hidden>
-    <div class="panel-head"><h2>Today at a glance</h2><button class="btn btn-primary btn-sm" type="button" data-add-med>+ Add medicine</button></div>
+    <div class="panel-head"><h2>Today at a glance</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" type="button" data-new-bill>+ New bill</button><button class="btn btn-primary btn-sm" type="button" data-add-med>+ Add medicine</button></div></div>
     <div class="stats" id="stats"></div>
     <div id="alerts"></div>
+  </section>
+
+  <section class="panel" id="tab-bills" role="tabpanel" hidden>
+    <div class="panel-head"><h2>Bills <span class="muted hi">· बिल</span></h2><button class="btn btn-primary btn-sm" type="button" data-new-bill>+ New bill / नया बिल</button></div>
+    <div class="sales-card" id="sales-card"></div>
+    <div class="chips" role="group" aria-label="Date">
+      <button class="chip" type="button" data-range="today" aria-pressed="true">Today / आज</button>
+      <button class="chip" type="button" data-range="yesterday" aria-pressed="false">Yesterday / कल</button>
+      <button class="chip" type="button" data-range="7" aria-pressed="false">7 days</button>
+      <button class="chip" type="button" data-range="30" aria-pressed="false">30 days</button>
+    </div>
+    <div class="row2 date-row"><div class="field"><label for="bf-from">From / से</label><input id="bf-from" type="date"></div><div class="field"><label for="bf-to">To / तक</label><input id="bf-to" type="date"></div></div>
+    <div class="list" id="bill-list"></div>
+  </section>
+
+  <section class="panel" id="tab-newbill" role="tabpanel" hidden>
+    <div class="panel-head"><h2>New bill <span class="muted hi">· नया बिल</span></h2><button class="btn btn-ghost btn-sm" type="button" data-go="bills">← Bills</button></div>
+    <form class="form" id="bill-form" novalidate autocomplete="off">
+      <div class="section-card">
+        <div class="row2"><div class="field"><label for="b-cname">Customer name / ग्राहक <span class="muted">(optional)</span></label><input id="b-cname" maxlength="80"></div><div class="field"><label for="b-cphone">Mobile / मोबाइल <span class="muted">(optional)</span></label><input id="b-cphone" type="tel" inputmode="numeric" maxlength="14" placeholder="10-digit number"></div></div>
+      </div>
+      <div class="section-card">
+        <div class="field"><label for="b-search">Add medicine / दवा जोड़ें</label><input id="b-search" type="search" placeholder="Type medicine name or batch" enterkeyhint="search"></div>
+        <div class="pick-list" id="b-results"></div>
+        <div id="b-lines" class="bill-lines"></div>
+      </div>
+      <div class="section-card">
+        <div class="row2 tight">
+          <div class="field"><label for="b-disc">Discount / छूट</label><div class="inline"><input id="b-disc" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0"><select id="b-disc-type" aria-label="Discount type"><option value="percent">%</option><option value="amount">₹</option></select></div></div>
+          <div class="field"><label for="b-gst-mode">GST</label><div class="inline"><select id="b-gst-mode"><option value="none">No GST</option><option value="incl">Included in price</option><option value="excl">Add on top</option></select><select id="b-gst" aria-label="GST percent"><option value="5">5%</option><option value="12" selected>12%</option><option value="18">18%</option><option value="0">0%</option></select></div></div>
+        </div>
+        <div class="bill-totals" id="b-totals"></div>
+      </div>
+      <div class="alert alert-error" id="b-err" role="alert" hidden></div>
+      <div class="bill-save"><button class="btn btn-primary btn-block" type="submit" id="b-save">Save bill / बिल सेव करें</button></div>
+    </form>
+  </section>
+
+  <section class="panel" id="tab-billview" role="tabpanel" hidden>
+    <div class="panel-head no-print"><h2>Bill</h2><button class="btn btn-ghost btn-sm" type="button" data-go="bills">← Bills</button></div>
+    <div class="bill-acts no-print">
+      <button class="btn btn-primary" type="button" id="bv-print">🖨️ Print</button>
+      <a class="btn btn-wa" id="bv-wa" href="#" target="_blank" rel="noopener">WhatsApp pe bhejo</a>
+      <label class="paper"><span>Paper</span><select id="bv-paper" aria-label="Paper size"><option value="58">58 mm</option><option value="80">80 mm</option><option value="a4">A4</option></select></label>
+    </div>
+    <div class="inv-wrap"><div id="invoice" class="invoice inv-80"></div></div>
+    <p class="center no-print" style="margin-top:18px"><button class="btn btn-danger btn-sm" type="button" id="bv-del">Cancel bill (stock wapas)</button></p>
   </section>
 
   <section class="panel" id="tab-stock" role="tabpanel" hidden>
@@ -61,6 +109,8 @@
       <form class="form" id="profile-form" novalidate>
         <div class="field"><label for="p-store">Store name</label><input id="p-store" name="store_name" required maxlength="80"></div>
         <div class="row2"><div class="field"><label for="p-owner">Owner name</label><input id="p-owner" name="owner_name" required maxlength="60"></div><div class="field"><label for="p-city">City</label><input id="p-city" name="city" required maxlength="60"></div></div>
+        <div class="field"><label for="p-addr">Store address <span class="muted">(shown on bills)</span></label><textarea id="p-addr" name="store_address" rows="2" maxlength="200" placeholder="Shop no., road, area, PIN"></textarea></div>
+        <div class="row2"><div class="field"><label for="p-gstin">GSTIN <span class="muted">(optional)</span></label><input id="p-gstin" name="gstin" maxlength="15" autocapitalize="characters" placeholder="15 characters"></div><div class="field"><label for="p-dl">Drug licence no. <span class="muted">(optional)</span></label><input id="p-dl" name="drug_licence" maxlength="120" placeholder="e.g. 20B/21B no."></div></div>
         <p class="small muted" id="p-login"></p>
         <button class="btn btn-ghost" type="submit">Save details</button>
       </form>

@@ -227,12 +227,12 @@ textarea{min-height:120px;resize:vertical}
 .status.active{background:var(--green-l);border:1px solid #bbf7d0;color:#14532d}
 .status.expired{background:var(--red-l);border:1px solid #fecaca;color:#991b1b}
 .status .btn{min-height:38px}
-.tabs{position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(4,1fr);padding-bottom:env(safe-area-inset-bottom)}
+.tabs{position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(5,1fr);padding-bottom:env(safe-area-inset-bottom)}
 .tabs button{background:none;border:0;font:inherit;font-size:.75rem;font-weight:700;color:var(--mut);padding:8px 4px 10px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;min-height:58px}
 .tabs button svg{width:22px;height:22px}
 .tabs button[aria-selected=true]{color:var(--brand)}
 .tabs button:disabled{opacity:.4;cursor:not-allowed}
-@media (min-width:900px){.tabs{position:static;max-width:1160px;margin:0 auto;border:1px solid var(--line);border-radius:14px;grid-template-columns:repeat(4,max-content);gap:4px;padding:4px;background:#fff}.tabs button{flex-direction:row;font-size:.92rem;padding:8px 16px;border-radius:10px;min-height:44px}.tabs button[aria-selected=true]{background:var(--brand-xl)}.app-body{padding-bottom:40px}.tabs-wrap{padding:0 20px;margin-top:16px}}
+@media (min-width:900px){.tabs{position:static;max-width:1160px;margin:0 auto;border:1px solid var(--line);border-radius:14px;grid-template-columns:repeat(5,max-content);gap:4px;padding:4px;background:#fff}.tabs button{flex-direction:row;font-size:.92rem;padding:8px 16px;border-radius:10px;min-height:44px}.tabs button[aria-selected=true]{background:var(--brand-xl)}.app-body{padding-bottom:40px}.tabs-wrap{padding:0 20px;margin-top:16px}}
 .panel{padding:4px 0 24px}
 .panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0 14px}
 .panel-head h2{font-size:1.35rem;margin:0}
@@ -316,3 +316,74 @@ dialog::backdrop{background:rgba(15,23,42,.5)}
   .stat strong{font-size:1.7rem}
 }
 @media (min-width:1400px){.app-body .wrap,.app-body .tabs{max-width:1320px}}
+
+/* ---------- bills ---------- */
+.hi{font-weight:600;font-size:.95rem}
+.sales-card{background:var(--brand-xl,#ecfdf5);border:1px solid #a7f3d0;border-radius:14px;padding:14px;margin-bottom:12px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center}
+.sales-card small{display:block;color:var(--mut);font-weight:600;font-size:.8rem}
+.sales-card strong{font-size:1.45rem;letter-spacing:-.02em}
+.date-row{margin-bottom:12px}
+.date-row .field label{font-size:.82rem;margin-bottom:4px}
+.row2.tight{gap:10px}
+.inline{display:flex;gap:6px}
+.inline input{flex:1;min-width:0}
+.inline select{width:auto;flex:0 0 auto}
+.inline select#b-gst-mode{flex:1;min-width:0}
+.pick-list{display:grid;gap:6px;margin-top:8px}
+.pick{display:flex;justify-content:space-between;gap:10px;align-items:center;text-align:left;width:100%;background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit;cursor:pointer;color:var(--ink)}
+.pick:hover{border-color:var(--brand)}
+.pick b{display:block;word-break:break-word}
+.pick small{display:block;color:var(--mut);font-size:.8rem}
+.pick[disabled]{opacity:.55;cursor:not-allowed}
+.pick .add{font-weight:800;color:var(--brand);font-size:1.3rem;flex:0 0 auto}
+.bill-lines{display:grid;gap:8px;margin-top:12px}
+.bline{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fafafa}
+.bline.over{border-color:#fca5a5;background:#fef2f2}
+.bline-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.bline-top b{word-break:break-word}
+.bline small{display:block;color:var(--mut);font-size:.8rem}
+.bline-x{background:none;border:0;font-size:1.3rem;line-height:1;color:var(--mut);cursor:pointer;padding:2px 6px}
+.bline-row{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-top:8px}
+.bline-row label{font-size:.75rem;font-weight:700;color:var(--mut);display:block;margin-bottom:2px}
+.bline-row input{min-height:40px;padding:6px 10px}
+.bline-amt{font-weight:800;text-align:right;min-width:72px;padding-bottom:9px}
+.bline .warn{color:#b91c1c;font-weight:700;font-size:.82rem;margin-top:6px}
+.bill-totals{margin-top:12px;border-top:1px dashed #cbd5e1;padding-top:10px;display:grid;gap:4px}
+.bill-totals div{display:flex;justify-content:space-between;font-size:.95rem}
+.bill-totals .grand{font-size:1.25rem;font-weight:800;border-top:1px solid var(--line);padding-top:8px;margin-top:4px}
+.bill-save{position:sticky;bottom:72px;z-index:5;padding:8px 0;background:linear-gradient(rgba(241,245,249,0),#f1f5f9 30%)}
+@media (min-width:900px){.bill-save{bottom:0}}
+.bill-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.bill-acts .btn{flex:1 1 auto}
+.paper{display:flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700;color:var(--mut)}
+.paper select{width:auto;min-height:40px;padding:4px 8px}
+.inv-wrap{overflow-x:auto;background:#e2e8f0;border-radius:14px;padding:14px 8px}
+.invoice{background:#fff;color:#000;margin:0 auto;padding:10px;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Devanagari",sans-serif;line-height:1.35;box-shadow:0 1px 4px rgba(0,0,0,.15)}
+.invoice.inv-58{width:58mm;font-size:10px;padding:2mm}
+.invoice.inv-80{width:80mm;font-size:11.5px;padding:3mm}
+.invoice.inv-a4{width:100%;max-width:190mm;font-size:13px;padding:8mm}
+.inv-head{text-align:center;border-bottom:1px dashed #000;padding-bottom:5px;margin-bottom:5px}
+.inv-head h1{font-size:1.45em;margin:0 0 2px;line-height:1.2;word-break:break-word}
+.inv-head p{margin:0;word-break:break-word}
+.inv-title{text-align:center;font-weight:800;letter-spacing:.06em;margin:4px 0}
+.inv-meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:2px 10px;border-bottom:1px dashed #000;padding-bottom:5px;margin-bottom:5px}
+.inv-items{width:100%;border-collapse:collapse}
+.inv-items th{text-align:left;border-bottom:1px solid #000;font-size:.92em;padding:2px 2px}
+.inv-items td{vertical-align:top;padding:3px 2px;border-bottom:1px dotted #999}
+.inv-items .n{text-align:right;white-space:nowrap}
+.inv-items small{display:block;font-size:.85em;color:#333}
+.inv-tot{margin-top:5px;display:grid;gap:2px}
+.inv-tot div{display:flex;justify-content:space-between;gap:8px}
+.inv-tot .grand{font-size:1.3em;font-weight:800;border-top:1px solid #000;border-bottom:1px solid #000;padding:3px 0;margin-top:3px}
+.inv-foot{text-align:center;margin-top:8px;font-size:.92em}
+.inv-foot small{display:block;color:#555;font-size:.85em;margin-top:2px}
+@media print{
+  html,body{background:#fff!important}
+  body.app-body{padding:0!important;margin:0}
+  .app-top,.tabs-wrap,.tabs,#status,#email-note,#loading,.toast,.no-print{display:none!important}
+  main.wrap{padding:0!important;margin:0!important;max-width:none!important}
+  .panel:not(#tab-billview){display:none!important}
+  .inv-wrap{background:none;padding:0;border-radius:0;overflow:visible}
+  .invoice{box-shadow:none;margin:0}
+  .invoice.inv-a4{max-width:none}
+}

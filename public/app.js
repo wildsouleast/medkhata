@@ -98,10 +98,13 @@
   // ---------- tabs ----------
   function showTab(name) {
     state.tab = name;
-    document.querySelectorAll('.tabs button').forEach(function (b) { b.setAttribute('aria-selected', b.dataset.tab === name ? 'true' : 'false'); });
-    ['home', 'stock', 'refills', 'plan'].forEach(function (t) { $('tab-' + t).hidden = t !== name; });
+    var navName = (name === 'newbill' || name === 'billview') ? 'bills' : name;
+    document.querySelectorAll('.tabs button').forEach(function (b) { b.setAttribute('aria-selected', b.dataset.tab === navName ? 'true' : 'false'); });
+    ['home', 'bills', 'newbill', 'billview', 'stock', 'refills', 'plan'].forEach(function (t) { $('tab-' + t).hidden = t !== name; });
     if (name === 'home') loadHome();
     if (name === 'stock') loadMeds();
+    if (name === 'bills') loadBills();
+    if (name === 'newbill') startBill();
     if (name === 'refills') loadReminders();
     if (name === 'plan') loadPlan();
     window.scrollTo(0, 0);
@@ -202,6 +205,206 @@
     api('DELETE', '/api/medicines/' + editingMed.id).then(function () { $('med-dlg').close(); toast('Medicine deleted'); refreshCurrent(); }).catch(function (x) { $('m-err').textContent = x.message; $('m-err').hidden = false; });
   });
 
+  // ---------- customer bills ----------
+  var bill = { lines: [] }, billRange = { from: todayISO(0), to: todayISO(0) }, currentBill = null;
+  function r2(n) { return Math.round((Number(n) + Number.EPSILON) * 100) / 100; }
+  function money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function fmtDateTime(s) { return new Date(s).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+
+  function loadBills() {
+    $('bf-from').value = billRange.from; $('bf-to').value = billRange.to;
+    return api('GET', '/api/bills?from=' + billRange.from + '&to=' + billRange.to).then(function (r) {
+      var single = r.from === r.to;
+      var label = single ? (r.from === todayISO(0) ? 'Today’s sales / आज की बिक्री' : 'Sales on ' + fmtDate(r.from)) : 'Sales ' + fmtDate(r.from) + ' – ' + fmtDate(r.to);
+      $('sales-card').innerHTML = '<div><small>' + label + '</small><strong>' + money(r.summary.total) + '</strong><small>' + r.summary.count + (r.summary.count === 1 ? ' bill' : ' bills') + '</small></div>' +
+        (single && r.from === todayISO(0) ? '' : '<div><small>Today / आज</small><strong style="font-size:1.1rem">' + money(r.today.total) + '</strong><small>' + r.today.count + ' bills</small></div>');
+      if (!r.bills.length) { $('bill-list').innerHTML = '<div class="empty">No bills for these dates. Tap “+ New bill” to make one.</div>'; return; }
+      $('bill-list').innerHTML = r.bills.map(function (b) {
+        return '<button type="button" class="item bill-item" data-bill="' + b.id + '" style="text-align:left;font:inherit;cursor:pointer;width:100%"><div class="main"><b>Bill #' + b.bill_no + (b.customer_name ? ' · ' + esc(b.customer_name) : '') + '</b><small>' + fmtDateTime(b.created_at) + ' · ' + b.item_count + (b.item_count === 1 ? ' item' : ' items') + (b.customer_phone ? ' · ' + esc(b.customer_phone) : '') + '</small></div><div class="side"><strong>' + money(b.total) + '</strong></div></button>';
+      }).join('');
+    }).catch(showError);
+  }
+  function setRange(kind) {
+    if (kind === 'today') billRange = { from: todayISO(0), to: todayISO(0) };
+    else if (kind === 'yesterday') billRange = { from: todayISO(-1), to: todayISO(-1) };
+    else billRange = { from: todayISO(-(Number(kind) - 1)), to: todayISO(0) };
+    document.querySelectorAll('[data-range]').forEach(function (x) { x.setAttribute('aria-pressed', x.dataset.range === kind ? 'true' : 'false'); });
+    loadBills();
+  }
+  document.querySelectorAll('[data-range]').forEach(function (c) { c.addEventListener('click', function () { setRange(c.dataset.range); }); });
+  ['bf-from', 'bf-to'].forEach(function (id) {
+    $(id).addEventListener('change', function () {
+      var f = $('bf-from').value, t = $('bf-to').value; if (!f) return;
+      if (!t || t < f) { t = f; $('bf-to').value = t; }
+      billRange = { from: f, to: t };
+      document.querySelectorAll('[data-range]').forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+      loadBills();
+    });
+  });
+
+  function startBill() {
+    bill = { lines: [] };
+    $('bill-form').reset(); $('b-err').hidden = true; $('b-results').innerHTML = '';
+    $('b-disc-type').value = 'percent'; $('b-gst-mode').value = 'none'; $('b-gst').value = '12';
+    renderLines();
+    api('GET', '/api/medicines').then(function (r) { state.meds = r.medicines; }).catch(showError);
+  }
+  function renderResults() {
+    var q = ($('b-search').value || '').trim().toLowerCase();
+    if (!q) { $('b-results').innerHTML = ''; return; }
+    var list = state.meds.filter(function (m) { return (m.name + ' ' + m.batch).toLowerCase().indexOf(q) !== -1; }).slice(0, 8);
+    if (!list.length) { $('b-results').innerHTML = '<div class="small muted">No medicine found in stock.</div>'; return; }
+    $('b-results').innerHTML = list.map(function (m) {
+      var why = m.days_left < 0 ? 'Expired – cannot sell' : m.qty <= 0 ? 'Out of stock' : '';
+      return '<button type="button" class="pick" data-pick="' + m.id + '"' + (why ? ' disabled' : '') + '><span><b>' + esc(m.name) + '</b><small>' + (m.batch ? 'Batch ' + esc(m.batch) + ' · ' : '') + 'Exp ' + fmtDate(m.expiry) + ' · Stock ' + m.qty + ' · ' + money(m.price) + '</small>' + (why ? '<small style="color:#b91c1c;font-weight:700">' + why + '</small>' : (m.days_left <= 30 ? '<small style="color:#b45309;font-weight:700">Expires in ' + m.days_left + ' days</small>' : '')) + '</span><span class="add">' + (why ? '' : '+') + '</span></button>';
+    }).join('');
+  }
+  $('b-search').addEventListener('input', renderResults);
+  $('b-search').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var p = $('b-results').querySelector('.pick:not([disabled])'); if (p) p.click(); } });
+
+  function addLine(id) {
+    var m = state.meds.filter(function (x) { return x.id === Number(id); })[0]; if (!m) return;
+    var ex = bill.lines.filter(function (l) { return l.med.id === m.id; })[0];
+    if (ex) ex.qty += 1; else bill.lines.push({ med: m, qty: 1, price: m.price });
+    $('b-search').value = ''; $('b-results').innerHTML = '';
+    renderLines();
+  }
+  function totals() {
+    var sub = r2(bill.lines.reduce(function (s, l) { return s + r2((Number(l.qty) || 0) * (Number(l.price) || 0)); }, 0));
+    var dv = Number($('b-disc').value) || 0, dt = $('b-disc-type').value;
+    var disc = dt === 'percent' ? r2(sub * Math.min(dv, 100) / 100) : r2(dv);
+    var taxable = r2(sub - disc), mode = $('b-gst-mode').value, pct = Number($('b-gst').value) || 0, gst = 0, total = taxable;
+    if (mode === 'incl') gst = r2(taxable - taxable / (1 + pct / 100));
+    if (mode === 'excl') { gst = r2(taxable * pct / 100); total = r2(taxable + gst); }
+    return { sub: sub, disc: disc, dv: dv, dt: dt, mode: mode, pct: pct, gst: gst, total: total, badDisc: disc > sub || dv < 0 };
+  }
+  function renderTotals() {
+    var t = totals();
+    $('b-gst').disabled = t.mode === 'none';
+    $('b-totals').innerHTML = '<div><span>Subtotal</span><span>' + money(t.sub) + '</span></div>' +
+      (t.disc ? '<div><span>Discount' + (t.dt === 'percent' ? ' (' + t.dv + '%)' : '') + '</span><span>− ' + money(t.disc) + '</span></div>' : '') +
+      (t.mode === 'incl' ? '<div class="muted"><span>GST ' + t.pct + '% (included)</span><span>' + money(t.gst) + '</span></div>' : '') +
+      (t.mode === 'excl' ? '<div><span>GST ' + t.pct + '%</span><span>+ ' + money(t.gst) + '</span></div>' : '') +
+      '<div class="grand"><span>Total / कुल</span><span>' + money(t.total) + '</span></div>' +
+      (t.badDisc ? '<div style="color:#b91c1c;font-weight:700">Discount is more than the bill amount.</div>' : '');
+    var over = bill.lines.some(function (l) { return l.qty > l.med.qty || !(l.qty >= 1); });
+    $('b-save').disabled = !bill.lines.length || over || t.badDisc;
+  }
+  function renderLines() {
+    if (!bill.lines.length) { $('b-lines').innerHTML = '<div class="empty" style="padding:14px">No medicine added yet. Search above and tap a medicine.</div>'; renderTotals(); return; }
+    $('b-lines').innerHTML = bill.lines.map(function (l, i) {
+      var m = l.med, over = l.qty > m.qty;
+      return '<div class="bline' + (over ? ' over' : '') + '" data-line="' + i + '"><div class="bline-top"><div><b>' + esc(m.name) + '</b><small>' + (m.batch ? 'Batch ' + esc(m.batch) + ' · ' : '') + 'Exp ' + fmtDate(m.expiry) + ' · In stock ' + m.qty + '</small></div><button type="button" class="bline-x" data-rm="' + i + '" aria-label="Remove ' + esc(m.name) + '">×</button></div>' +
+        '<div class="bline-row"><div><label for="lq' + i + '">Qty</label><input id="lq' + i + '" type="number" inputmode="numeric" min="1" step="1" value="' + l.qty + '" data-q="' + i + '"></div><div><label for="lp' + i + '">Price ₹ (MRP)</label><input id="lp' + i + '" type="number" inputmode="decimal" min="0" step="0.01" value="' + l.price + '" data-p="' + i + '"></div><div class="bline-amt" id="la' + i + '">' + money(r2(l.qty * l.price)) + '</div></div>' +
+        (over ? '<div class="warn">⚠️ Only ' + m.qty + ' in stock / स्टॉक में सिर्फ ' + m.qty + '</div>' : '') + '</div>';
+    }).join('');
+    renderTotals();
+  }
+  $('b-lines').addEventListener('input', function (e) {
+    var t = e.target, i;
+    if (t.dataset.q !== undefined) { i = Number(t.dataset.q); bill.lines[i].qty = t.value === '' ? 0 : Math.floor(Number(t.value)); }
+    else if (t.dataset.p !== undefined) { i = Number(t.dataset.p); bill.lines[i].price = Number(t.value) || 0; }
+    else return;
+    var l = bill.lines[i], box = t.closest('.bline');
+    $('la' + i).textContent = money(r2(l.qty * l.price));
+    var over = l.qty > l.med.qty;
+    box.classList.toggle('over', over);
+    var w = box.querySelector('.warn');
+    if (over && !w) { w = document.createElement('div'); w.className = 'warn'; box.appendChild(w); }
+    if (w) { if (over) w.textContent = '⚠️ Only ' + l.med.qty + ' in stock / स्टॉक में सिर्फ ' + l.med.qty; else w.remove(); }
+    renderTotals();
+  });
+  $('b-lines').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-rm]'); if (!b) return;
+    bill.lines.splice(Number(b.dataset.rm), 1); renderLines();
+  });
+  ['b-disc', 'b-disc-type', 'b-gst-mode', 'b-gst'].forEach(function (id) { $(id).addEventListener('input', renderTotals); $(id).addEventListener('change', renderTotals); });
+
+  $('bill-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var err = $('b-err'), btn = $('b-save'), t = totals();
+    if (!bill.lines.length) { err.textContent = 'Add at least one medicine.'; err.hidden = false; return; }
+    var data = {
+      customer_name: $('b-cname').value, customer_phone: $('b-cphone').value,
+      items: bill.lines.map(function (l) { return { medicine_id: l.med.id, qty: l.qty, price: l.price }; }),
+      discount_type: t.dt, discount_value: t.dv, gst_mode: t.mode, gst_percent: t.pct,
+    };
+    btn.disabled = true; err.hidden = true; btn.textContent = 'Saving…';
+    api('POST', '/api/bills', data).then(function (r) {
+      toast('Bill #' + r.bill.bill_no + ' saved. Stock updated.');
+      openBill(r.bill);
+    }).catch(function (x) {
+      err.textContent = x.message; err.hidden = false;
+      if (x.status === 409 && x.j && x.j.medicine_id) {
+        bill.lines.forEach(function (l) { if (l.med.id === x.j.medicine_id) l.med.qty = x.j.available; });
+        renderLines();
+      }
+    }).finally(function () { btn.textContent = 'Save bill / बिल सेव करें'; renderTotals(); });
+  });
+
+  function waText(b) {
+    var u = state.user, lines = [];
+    lines.push('*' + u.store_name + '*');
+    lines.push('Bill No. ' + b.bill_no + ' · ' + fmtDateTime(b.created_at));
+    if (b.customer_name) lines.push('Customer: ' + b.customer_name);
+    lines.push('');
+    b.items.forEach(function (it, i) { lines.push((i + 1) + '. ' + it.name + ' × ' + it.qty + ' = ' + money(it.amount)); });
+    lines.push('');
+    if (b.discount_amount || b.gst_mode === 'excl') lines.push('Subtotal: ' + money(b.subtotal));
+    if (b.discount_amount) lines.push('Discount: −' + money(b.discount_amount));
+    if (b.gst_mode === 'excl') lines.push('GST ' + b.gst_percent + '%: +' + money(b.gst_amount));
+    lines.push('*Total: ' + money(b.total) + '*');
+    if (b.gst_mode === 'incl') lines.push('(GST ' + b.gst_percent + '% included: ' + money(b.gst_amount) + ')');
+    lines.push('');
+    lines.push('Dhanyavaad! 🙏 Jaldi swasth ho jaiye.');
+    return lines.join('\n');
+  }
+  function invoiceHTML(b) {
+    var u = state.user;
+    var head = '<div class="inv-head"><h1>' + esc(u.store_name) + '</h1>' +
+      (u.store_address ? '<p>' + esc(u.store_address) + '</p>' : '') + '<p>' + (u.store_address && u.store_address.toLowerCase().indexOf(String(u.city || '').toLowerCase()) !== -1 ? '' : esc(u.city) + ' · ') + 'Ph ' + esc(u.phone) + '</p>' +
+      (u.gstin ? '<p>GSTIN: ' + esc(u.gstin) + '</p>' : '') + (u.drug_licence ? '<p>D.L. No: ' + esc(u.drug_licence) + '</p>' : '') + '</div>';
+    var title = '<div class="inv-title">' + (b.gst_mode !== 'none' && u.gstin ? 'TAX INVOICE' : 'BILL / CASH MEMO') + '</div>';
+    var meta = '<div class="inv-meta"><span><b>Bill No:</b> ' + b.bill_no + '</span><span>' + fmtDateTime(b.created_at) + '</span>' +
+      (b.customer_name || b.customer_phone ? '<span style="flex-basis:100%"><b>Customer:</b> ' + esc(b.customer_name || '') + (b.customer_phone ? ' · ' + esc(b.customer_phone) : '') + '</span>' : '') + '</div>';
+    var rows = b.items.map(function (it, i) {
+      return '<tr><td>' + (i + 1) + '. ' + esc(it.name) + '<small>' + (it.batch ? 'B: ' + esc(it.batch) + ' · ' : '') + (it.expiry ? 'Exp: ' + esc(it.expiry.slice(5, 7) + '/' + it.expiry.slice(2, 4)) : '') + '</small></td><td class="n">' + it.qty + '</td><td class="n">' + Number(it.price).toFixed(2) + '</td><td class="n">' + Number(it.amount).toFixed(2) + '</td></tr>';
+    }).join('');
+    var table = '<table class="inv-items"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Amt</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    var tot = '<div class="inv-tot"><div><span>Subtotal</span><span>' + money(b.subtotal) + '</span></div>' +
+      (b.discount_amount ? '<div><span>Discount' + (b.discount_type === 'percent' ? ' (' + b.discount_value + '%)' : '') + '</span><span>−' + money(b.discount_amount) + '</span></div>' : '') +
+      (b.gst_mode === 'excl' ? '<div><span>GST ' + b.gst_percent + '%</span><span>+' + money(b.gst_amount) + '</span></div>' : '') +
+      '<div class="grand"><span>TOTAL</span><span>' + money(b.total) + '</span></div>' +
+      (b.gst_mode === 'incl' ? '<div><span>Incl. GST ' + b.gst_percent + '%</span><span>' + money(b.gst_amount) + '</span></div>' : '') + '</div>';
+    var foot = '<div class="inv-foot">Dhanyavaad! Get well soon 🙏<small>Items: ' + b.items.length + ' · Qty: ' + b.items.reduce(function (s, it) { return s + it.qty; }, 0) + '</small><small>Bill by Dawalekh</small></div>';
+    return head + title + meta + table + tot + foot;
+  }
+  function openBill(b) {
+    currentBill = b;
+    showTab('billview');
+    var paper = localStorage.getItem('dl_paper') || '80';
+    $('bv-paper').value = paper; setPaper(paper);
+    $('invoice').innerHTML = invoiceHTML(b);
+    var phone = (b.customer_phone || '').replace(/\D/g, '');
+    $('bv-wa').href = 'https://wa.me/' + (phone ? '91' + phone : '') + '?text=' + encodeURIComponent(waText(b));
+  }
+  function setPaper(p) { $('invoice').className = 'invoice inv-' + p; }
+  $('bv-paper').addEventListener('change', function () { localStorage.setItem('dl_paper', this.value); setPaper(this.value); });
+  $('bv-print').addEventListener('click', function () {
+    var p = $('bv-paper').value, st = $('page-size');
+    if (!st) { st = document.createElement('style'); st.id = 'page-size'; document.head.appendChild(st); }
+    if (p === 'a4') st.textContent = '@page{size:A4;margin:12mm}';
+    else {
+      var mm = Math.ceil($('invoice').getBoundingClientRect().height * 25.4 / 96) + 8;
+      st.textContent = '@page{size:' + p + 'mm ' + mm + 'mm;margin:0}';
+    }
+    window.print();
+  });
+  $('bv-del').addEventListener('click', function () {
+    if (!currentBill || !confirm('Cancel Bill #' + currentBill.bill_no + '? Its medicines will be added back to stock.\n\nBill cancel karein? Stock wapas jud jayega.')) return;
+    api('DELETE', '/api/bills/' + currentBill.id).then(function () { toast('Bill cancelled. Stock added back.'); currentBill = null; showTab('bills'); }).catch(showError);
+  });
+
   // ---------- refill reminders ----------
   function loadReminders() {
     return api('GET', '/api/reminders').then(function (r) { state.reminders = r.reminders; renderReminders(); }).catch(showError);
@@ -268,7 +471,7 @@
       return '<div class="card' + (isCur ? ' current' : '') + '"><h3 style="margin:0">' + esc(p.name) + (isCur ? ' <span class="badge b-green">Current</span>' : '') + '</h3><div class="price">₹' + p.price + '<small> / 30 days</small></div><ul>' + p.features.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>' +
         '<button class="btn ' + (p.id === 'pro' ? 'btn-primary' : 'btn-ghost') + ' btn-block" type="button" data-pay="' + p.id + '"' + (cfg.payments.enabled ? '' : ' disabled') + '>' + (isCur ? 'Renew' : 'Pay') + ' ₹' + p.price + '</button></div>';
     }).join('');
-    var f = $('profile-form'); f.store_name.value = u.store_name; f.owner_name.value = u.owner_name; f.city.value = u.city;
+    var f = $('profile-form'); f.store_name.value = u.store_name; f.owner_name.value = u.owner_name; f.city.value = u.city; f.store_address.value = u.store_address || ''; f.gstin.value = u.gstin || ''; f.drug_licence.value = u.drug_licence || '';
     $('p-login').textContent = 'Login: +91 ' + u.phone + (u.email ? ' · ' + u.email : '');
     api('GET', '/api/billing/history').then(function (r) {
       if (!r.payments.length) { $('pay-history').textContent = 'No payments yet.'; return; }
@@ -312,7 +515,7 @@
 
   $('profile-form').addEventListener('submit', function (e) {
     e.preventDefault(); var f = e.target;
-    api('PUT', '/api/me', { store_name: f.store_name.value, owner_name: f.owner_name.value, city: f.city.value }).then(function (r) { state.user = r.user; $('store-name').textContent = r.user.store_name; toast('Details saved'); }).catch(function (x) { toast(x.message); });
+    api('PUT', '/api/me', { store_name: f.store_name.value, owner_name: f.owner_name.value, city: f.city.value, store_address: f.store_address.value, gstin: f.gstin.value, drug_licence: f.drug_licence.value }).then(function (r) { state.user = r.user; $('store-name').textContent = r.user.store_name; toast('Details saved'); }).catch(function (x) { toast(x.message); });
   });
   $('pw-form').addEventListener('submit', function (e) {
     e.preventDefault(); var f = e.target;
@@ -325,6 +528,9 @@
     if (t.dataset.tab && !t.disabled) showTab(t.dataset.tab);
     else if (t.dataset.go) showTab(t.dataset.go);
     else if (t.hasAttribute('data-add-med')) openMed(null);
+    else if (t.hasAttribute('data-new-bill')) showTab('newbill');
+    else if (t.dataset.pick) addLine(t.dataset.pick);
+    else if (t.dataset.bill) api('GET', '/api/bills/' + t.dataset.bill).then(function (r) { openBill(r.bill); }).catch(showError);
     else if (t.dataset.editMed) openMed(findMed(t.dataset.editMed));
     else if (t.dataset.editRem) openRem(state.reminders.filter(function (r) { return r.id === Number(t.dataset.editRem); })[0]);
     else if (t.dataset.pay) pay(t.dataset.pay, t);
@@ -334,10 +540,10 @@
       setTimeout(function () { api('POST', '/api/reminders/' + id + '/sent').then(function () { toast('Marked as sent. Next refill date updated.'); loadReminders(); }).catch(function () {}); }, 400);
     }
   });
-  document.querySelectorAll('.chip').forEach(function (c) {
+  document.querySelectorAll('.chip[data-filter]').forEach(function (c) {
     c.addEventListener('click', function () {
       state.filter = c.dataset.filter;
-      document.querySelectorAll('.chip').forEach(function (x) { x.setAttribute('aria-pressed', x === c ? 'true' : 'false'); });
+      document.querySelectorAll('.chip[data-filter]').forEach(function (x) { x.setAttribute('aria-pressed', x === c ? 'true' : 'false'); });
       renderMeds();
     });
   });
