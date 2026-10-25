@@ -123,7 +123,7 @@ const requireUser = wrap(async (req, res, next) => {
 function requireAccess(req, res, next) {
   const s = accountStatus(req.user);
   if (s.state === 'expired') {
-    return res.status(402).json({ error: 'plan_required', message: 'Your free trial has ended. Choose a plan to continue - your data is safe.' });
+    return res.status(402).json({ error: 'plan_required', message: 'Your free trial has ended. Choose a plan to continue. Your data is safe.' });
   }
   next();
 }

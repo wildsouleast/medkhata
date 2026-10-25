@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>My store — MedKhata</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0f766e">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+<script src="/app.js" defer></script>
+</head>
+<body class="app-body">
+<header class="app-top"><div class="wrap">
+  <a class="logo" href="/" aria-label="MedKhata home"><svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#0f766e"/><path d="M26 14h12v12h12v12H38v12H26V38H14V26h12z" fill="#fff"/></svg><span>Med<b>Khata</b></span></a>
+  <div class="app-store"><b id="store-name">&nbsp;</b><button type="button" id="logout">Log out</button></div>
+</div></header>
+<div class="tabs-wrap"><nav class="tabs" role="tablist" aria-label="App sections">
+  <button role="tab" data-tab="home" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span>Home</span></button>
+  <button role="tab" data-tab="stock" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span>Stock</span></button>
+  <button role="tab" data-tab="refills" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 01-9 8.4 8.6 8.6 0 01-4-1L3 20l1.2-4.5A8.4 8.4 0 1121 11.5z"/></svg><span>Refills</span></button>
+  <button role="tab" data-tab="plan" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg><span>Plan</span></button>
+</nav></div>
+<main id="main" class="wrap">
+  <div id="status" class="status" hidden></div>
+  <div id="loading" class="loading">Loading your store… (the first load can take up to a minute)</div>
+
+  <section class="panel" id="tab-home" role="tabpanel" hidden>
+    <div class="panel-head"><h2>Today at a glance</h2><button class="btn btn-primary btn-sm" type="button" data-add-med>+ Add medicine</button></div>
+    <div class="stats" id="stats"></div>
+    <div id="alerts"></div>
+  </section>
+
+  <section class="panel" id="tab-stock" role="tabpanel" hidden>
+    <div class="panel-head"><h2>Stock</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-ghost btn-sm" id="csv-stock" href="/api/medicines.csv">Download CSV</a><button class="btn btn-primary btn-sm" type="button" data-add-med>+ Add medicine</button></div></div>
+    <div class="toolbar"><label class="sr-only" for="search">Search medicines</label><input id="search" type="search" placeholder="Search by name, batch or supplier"></div>
+    <div class="chips" role="group" aria-label="Filter">
+      <button class="chip" type="button" data-filter="all" aria-pressed="true">All</button>
+      <button class="chip" type="button" data-filter="expiring" aria-pressed="false">Expiring in 90 days</button>
+      <button class="chip" type="button" data-filter="low" aria-pressed="false">Low stock</button>
+    </div>
+    <div class="list" id="med-list"></div>
+  </section>
+
+  <section class="panel" id="tab-refills" role="tabpanel" hidden>
+    <div class="panel-head"><h2>Refill reminders</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-ghost btn-sm" id="csv-rem" href="/api/reminders.csv">Download CSV</a><button class="btn btn-primary btn-sm" type="button" id="add-rem">+ Add patient</button></div></div>
+    <p class="muted small">Tap “Send on WhatsApp” to open WhatsApp with the message ready. After you send it, the next refill date moves forward automatically.</p>
+    <div class="list" id="rem-list"></div>
+  </section>
+
+  <section class="panel" id="tab-plan" role="tabpanel" hidden>
+    <div class="panel-head"><h2>Plan &amp; billing</h2></div>
+    <div id="pay-note"></div>
+    <div class="section-card" id="plan-current"></div>
+    <div class="plan-cards" id="plan-cards"></div>
+    <div class="section-card" style="margin-top:16px"><h3>Payment history</h3><div id="pay-history" class="muted">No payments yet.</div></div>
+    <div class="section-card"><h3>Store details</h3>
+      <form class="form" id="profile-form" novalidate>
+        <div class="field"><label for="p-store">Store name</label><input id="p-store" name="store_name" required maxlength="80"></div>
+        <div class="row2"><div class="field"><label for="p-owner">Owner name</label><input id="p-owner" name="owner_name" required maxlength="60"></div><div class="field"><label for="p-city">City</label><input id="p-city" name="city" required maxlength="60"></div></div>
+        <p class="small muted" id="p-login"></p>
+        <button class="btn btn-ghost" type="submit">Save details</button>
+      </form>
+    </div>
+    <div class="section-card"><h3>Change password</h3>
+      <form class="form" id="pw-form" novalidate>
+        <div class="row2"><div class="field"><label for="pw-cur">Current password</label><input id="pw-cur" name="current" type="password" autocomplete="current-password" required></div><div class="field"><label for="pw-new">New password</label><input id="pw-new" name="next" type="password" autocomplete="new-password" minlength="8" required></div></div>
+        <button class="btn btn-ghost" type="submit">Change password</button>
+      </form>
+    </div>
+    <p class="small muted center"><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/refund">Refund &amp; Cancellation</a> · <a href="/contact">Help</a></p>
+  </section>
+</main>
+
+<dialog id="med-dlg"><form class="dlg form" id="med-form" method="dialog" novalidate>
+  <h2 id="med-title">Add medicine</h2>
+  <div class="field"><label for="m-name">Medicine name</label><input id="m-name" name="name" required maxlength="100" placeholder="e.g. Paracetamol 650 mg"></div>
+  <div class="row2"><div class="field"><label for="m-batch">Batch number</label><input id="m-batch" name="batch" maxlength="40"></div><div class="field"><label for="m-expiry">Expiry date</label><input id="m-expiry" name="expiry" type="date" required></div></div>
+  <div class="row2"><div class="field"><label for="m-qty">Quantity in stock</label><input id="m-qty" name="qty" type="number" inputmode="numeric" min="0" step="1" required></div><div class="field"><label for="m-price">Price per unit (₹)</label><input id="m-price" name="price" type="number" inputmode="decimal" min="0" step="0.01" required></div></div>
+  <div class="row2"><div class="field"><label for="m-min">Low-stock level</label><input id="m-min" name="min_qty" type="number" inputmode="numeric" min="0" step="1" value="10"><div class="hint">Alert when stock is at or below this.</div></div><div class="field"><label for="m-supplier">Supplier <span class="muted">(optional)</span></label><input id="m-supplier" name="supplier" maxlength="80"></div></div>
+  <div class="alert alert-error" id="m-err" role="alert" hidden></div>
+  <div class="dlg-acts"><button class="btn btn-danger btn-sm" type="button" id="m-del" hidden>Delete</button><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+</form></dialog>
+
+<dialog id="rem-dlg"><form class="dlg form" id="rem-form" method="dialog" novalidate>
+  <h2 id="rem-title">Add patient reminder</h2>
+  <div class="row2"><div class="field"><label for="r-name">Patient name</label><input id="r-name" name="patient_name" required maxlength="80"></div><div class="field"><label for="r-phone">Mobile number</label><input id="r-phone" name="phone" type="tel" inputmode="numeric" required maxlength="14" placeholder="10-digit mobile number"></div></div>
+  <div class="field"><label for="r-med">Medicine</label><input id="r-med" name="medicine" required maxlength="120" placeholder="e.g. Metformin 500 mg"></div>
+  <div class="row2"><div class="field"><label for="r-every">Refill every (days)</label><input id="r-every" name="every_days" type="number" inputmode="numeric" min="1" max="365" step="1" value="30" required></div><div class="field"><label for="r-next">Next refill date</label><input id="r-next" name="next_due" type="date" required></div></div>
+  <p class="small muted">Please add only patients who are happy to get reminders from your store.</p>
+  <div class="alert alert-error" id="r-err" role="alert" hidden></div>
+  <div class="dlg-acts"><button class="btn btn-danger btn-sm" type="button" id="r-del" hidden>Delete</button><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+</form></dialog>
+</body>
+</html>
