@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set a new password — MedKhata</title>
+<meta name="description" content="Set a new password for your MedKhata account.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0f766e">
+<meta property="og:title" content="Set a new password — MedKhata">
+<meta property="og:description" content="Set a new password for your MedKhata account.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="/og.png">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/styles.css">
+<script src="/site.js" defer></script><script src="/reset.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="logo" href="/" aria-label="MedKhata home"><svg viewBox="0 0 64 64" width="32" height="32" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#0f766e"/><path d="M26 14h12v12h12v12H38v12H26V38H14V26h12z" fill="#fff"/></svg><span>Med<b>Khata</b></span></a>
+    <nav class="nav-links" id="nav-links" aria-label="Main"><a href="/#features">Features</a><a href="/pricing">Pricing</a><a href="/#faq">FAQ</a><a href="/about">About</a><a href="/contact">Contact</a><a class="mobile-only" href="/login">Log in</a></nav>
+    <div class="nav-cta"><a class="btn btn-ghost btn-sm" href="/login">Log in</a><a class="btn btn-primary btn-sm" href="/signup">Start free trial</a></div>
+    <button class="menu-btn" type="button" aria-controls="nav-links" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<main id="main">
+<div class="auth"><div class="card">
+  <h1>Set a new password</h1>
+  <p class="muted">Choose a new password for your MedKhata account. You will be logged out on every other phone.</p>
+  <form class="form" id="reset-form" novalidate>
+    <div class="field"><label for="r-pass">New password</label><div class="pw"><input id="r-pass" name="password" type="password" autocomplete="new-password" required minlength="8"><button type="button" data-toggle-pw="r-pass">Show</button></div><div class="hint">At least 8 characters.</div></div>
+    <div class="alert alert-error" id="r-err" role="alert" hidden></div>
+    <button class="btn btn-primary btn-block" type="submit">Save new password</button>
+  </form>
+  <p class="center small" style="margin:18px 0 0">Link expired? <a href="/forgot">Ask for a new one</a></p>
+</div></div>
+</main>
+
+</body>
+</html>

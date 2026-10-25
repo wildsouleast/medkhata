@@ -76,6 +76,12 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   event TEXT NOT NULL,
   received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS contact_messages (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,

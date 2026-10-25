@@ -7,6 +7,7 @@
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#0f766e">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/styles.css">
 <script src="/app.js" defer></script>
 </head>
@@ -36,7 +37,8 @@
     <div class="toolbar"><label class="sr-only" for="search">Search medicines</label><input id="search" type="search" placeholder="Search by name, batch or supplier"></div>
     <div class="chips" role="group" aria-label="Filter">
       <button class="chip" type="button" data-filter="all" aria-pressed="true">All</button>
-      <button class="chip" type="button" data-filter="expiring" aria-pressed="false">Expiring in 90 days</button>
+      <button class="chip" type="button" data-filter="expired" aria-pressed="false">Expired</button>
+      <button class="chip" type="button" data-filter="expiring" aria-pressed="false">Expiring ≤ 90 days</button>
       <button class="chip" type="button" data-filter="low" aria-pressed="false">Low stock</button>
     </div>
     <div class="list" id="med-list"></div>

@@ -7,7 +7,7 @@
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; });
   }
-  function rupees(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+  function rupees(n) { var v = Number(n || 0); return '₹' + v.toLocaleString('en-IN', { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 }); }
   function fmtDate(s) {
     if (!s) return '';
     var d = new Date(String(s).length === 10 ? s + 'T00:00:00' : s);
@@ -39,7 +39,7 @@
         return r.json().catch(function () { return {}; }).then(function (j) {
           if (r.status === 401) { location.replace('/login'); throw new Error('login'); }
           if (r.status === 402) { state.user && (state.user.status.state = 'expired'); renderStatus(); lockApp(); }
-          if (!r.ok) { var e = new Error((j && j.message) || 'Something went wrong. Please try again.'); e.status = r.status; throw e; }
+          if (!r.ok) { var e = new Error((j && j.message) || (r.status === 403 ? 'This text was blocked by our security filter. Please remove special symbols and try again.' : 'Something went wrong. Please try again.')); e.status = r.status; e.j = j; throw e; }
           return j;
         });
       });
@@ -112,7 +112,7 @@
       var t = a.totals;
       $('stats').innerHTML =
         '<div class="stat"><small>Medicines</small><strong>' + t.medicines + '</strong></div>' +
-        '<div class="stat"><small>Stock value</small><strong>' + rupees(t.stockValue) + '</strong></div>' +
+        '<div class="stat"><small>Stock value</small><strong>' + rupees(t.stockValue) + '</strong>' + (t.expiredValue ? '<small class="stat-note">+ ' + rupees(t.expiredValue) + ' expired</small>' : '') + '</div>' +
         '<div class="stat red"><small>Expired / ≤30 days</small><strong>' + (a.expired.length + a.within30.length) + '</strong></div>' +
         '<div class="stat amber"><small>Low stock</small><strong>' + a.lowStock.length + '</strong></div>' +
         '<div class="stat green"><small>Refills due</small><strong>' + t.remindersDue + '</strong></div>';
@@ -121,11 +121,11 @@
         return;
       }
       $('alerts').innerHTML =
-        (a.expired.length ? group('Already expired', 'b-red', a.expired, '') : '') +
+        (a.expired.length ? group('Already expired' + (t.expiredValue ? ' · ' + rupees(t.expiredValue) + ' of stock' : ''), 'b-red', a.expired, '') : '') +
         group('Expiring within 30 days', 'b-red', a.within30, 'Nothing expiring in the next 30 days. 👍') +
         group('Expiring in 31–60 days', 'b-amber', a.within60, 'Nothing in this range.') +
         group('Expiring in 61–90 days', 'b-yellow', a.within90, 'Nothing in this range.') +
-        group('Low stock', 'b-amber', a.lowStock, 'All medicines are above their low-stock level.', function (m) { return '<span class="badge b-amber">Only ' + m.qty + ' left</span>'; }) +
+        group('Low stock', 'b-amber', a.lowStock, 'All medicines are above their low-stock level.', function (m) { return m.qty === 0 ? '<span class="badge b-red">Out of stock</span>' : '<span class="badge b-amber">Only ' + m.qty + ' left</span>'; }) +
         (t.remindersDue ? '<div class="group"><h3><span class="badge b-green">' + t.remindersDue + '</span> Refills due today</h3><button class="btn btn-wa btn-sm" type="button" data-go="refills">Open refill reminders</button></div>' : '');
     }).catch(showError);
   }
@@ -137,7 +137,8 @@
   function renderMeds() {
     var q = ($('search').value || '').trim().toLowerCase();
     var list = state.meds.filter(function (m) {
-      if (state.filter === 'expiring' && m.days_left > 90) return false;
+      if (state.filter === 'expired' && m.days_left >= 0) return false;
+      if (state.filter === 'expiring' && (m.days_left < 0 || m.days_left > 90)) return false;
       if (state.filter === 'low' && m.qty > m.min_qty) return false;
       if (!q) return true;
       return (m.name + ' ' + m.batch + ' ' + m.supplier).toLowerCase().indexOf(q) !== -1;
@@ -145,7 +146,7 @@
     if (!state.meds.length) { $('med-list').innerHTML = '<div class="empty">No medicines yet. Tap “+ Add medicine” to add your first one.</div>'; return; }
     if (!list.length) { $('med-list').innerHTML = '<div class="empty">No medicines match.</div>'; return; }
     $('med-list').innerHTML = list.map(function (m) {
-      var low = m.qty <= m.min_qty ? ' <span class="badge b-amber">Low stock</span>' : '';
+      var low = m.qty === 0 ? ' <span class="badge b-red">Out of stock</span>' : m.qty <= m.min_qty ? ' <span class="badge b-amber">Low stock</span>' : '';
       return '<div class="item"><div class="main"><b>' + esc(m.name) + '</b><small>' + (m.batch ? 'Batch ' + esc(m.batch) + ' · ' : '') + 'Exp ' + fmtDate(m.expiry) + '</small><small>Qty <strong>' + m.qty + '</strong> · ' + rupees(m.price) + ' each' + (m.supplier ? ' · ' + esc(m.supplier) : '') + '</small></div><div class="side">' + expiryBadge(m.days_left) + low + '<button class="btn btn-ghost btn-sm" type="button" data-edit-med="' + m.id + '">Edit</button></div></div>';
     }).join('');
   }
@@ -176,7 +177,12 @@
     if (!Number.isFinite(data.qty)) { err.textContent = 'Please enter the quantity.'; err.hidden = false; return; }
     if (!Number.isFinite(data.price)) { err.textContent = 'Please enter the price.'; err.hidden = false; return; }
     btn.disabled = true; err.hidden = true;
-    (editingMed ? api('PUT', '/api/medicines/' + editingMed.id, data) : api('POST', '/api/medicines', data))
+    function save(d) { return editingMed ? api('PUT', '/api/medicines/' + editingMed.id, d) : api('POST', '/api/medicines', d); }
+    save(data)
+      .catch(function (x) {
+        if (x.status === 409 && x.j && x.j.error === 'duplicate' && confirm(x.message + '\n\nAdd it as a separate entry anyway?')) { data.allow_duplicate = true; return save(data); }
+        throw x;
+      })
       .then(function () { $('med-dlg').close(); toast(editingMed ? 'Medicine updated' : 'Medicine added'); refreshCurrent(); })
       .catch(function (x) { err.textContent = x.message; err.hidden = false; })
       .finally(function () { btn.disabled = false; });

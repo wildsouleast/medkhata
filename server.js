@@ -136,7 +136,15 @@ async function startSession(res, userId) {
 
 function str(v, max) { return String(v == null ? '' : v).trim().slice(0, max); }
 function bad(res, message, field) { return res.status(400).json({ error: 'invalid', message, field }); }
-function isDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)); }
+// A real calendar date (rejects 2026-02-30, year 0000 etc.), between 2000 and 2099.
+function isDate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  if (y < 2000 || y > 2099) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
 
 // ---------- public config ----------
 app.get('/api/config', (req, res) => {
@@ -190,7 +198,7 @@ app.post('/api/signup', wrap(async (req, res) => {
 app.post('/api/login', wrap(async (req, res) => {
   const b = req.body || {};
   const id = str(b.login, 120);
-  if (A.rateLimited(`login:${clientIp(req)}`, 20, 15 * 60 * 1000) || A.rateLimited(`login-id:${id.toLowerCase()}`, 8, 15 * 60 * 1000)) {
+  if (A.rateLimited(`login:${clientIp(req)}`, 30, 15 * 60 * 1000) || A.isLimited(`login-id:${id.toLowerCase()}`, 8, 15 * 60 * 1000)) {
     return res.status(429).json({ error: 'rate_limited', message: 'Too many attempts. Please wait 15 minutes and try again.' });
   }
   const phone = A.normalizePhone(id);
@@ -199,8 +207,11 @@ app.post('/api/login', wrap(async (req, res) => {
     : email ? await pool.query('SELECT * FROM users WHERE email=$1', [email]) : { rows: [] };
   const u = r.rows[0];
   if (!u || !A.verifyPassword(String(b.password || ''), u.password_hash)) {
+    A.rateLimited(`login-id:${id.toLowerCase()}`, 8, 15 * 60 * 1000);
     return res.status(401).json({ error: 'bad_login', message: 'Mobile number/email or password is incorrect.' });
   }
+  A.clearLimit(`login-id:${id.toLowerCase()}`);
+  pool.query('DELETE FROM sessions WHERE expires_at < now()').catch(() => {});
   await startSession(res, u.id);
   res.json({ user: publicUser(u) });
 }));
@@ -231,6 +242,9 @@ app.post('/api/me/password', requireUser, wrap(async (req, res) => {
   if (!A.verifyPassword(String(b.current || ''), req.user.password_hash)) return res.status(400).json({ error: 'invalid', message: 'Current password is incorrect.' });
   if (String(b.next || '').length < 8) return bad(res, 'New password must be at least 8 characters.');
   await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [A.hashPassword(String(b.next)), req.user.id]);
+  // Log out every other device; keep this one.
+  const token = parseCookies(req)[COOKIE];
+  await pool.query('DELETE FROM sessions WHERE user_id=$1 AND token_hash<>$2', [req.user.id, A.tokenHash(token || '')]);
   res.json({ ok: true });
 }));
 
@@ -258,6 +272,13 @@ app.get('/api/medicines', requireUser, requireAccess, wrap(async (req, res) => {
 app.post('/api/medicines', requireUser, requireAccess, wrap(async (req, res) => {
   const { m, error } = readMedicine(req.body || {});
   if (error) return bad(res, error);
+  if (req.body.allow_duplicate !== true) {
+    const d = await pool.query(`SELECT ${MED_COLS} FROM medicines WHERE user_id=$1 AND lower(name)=lower($2) AND lower(batch)=lower($3) LIMIT 1`, [req.user.id, m.name, m.batch]);
+    if (d.rowCount) {
+      const x = d.rows[0];
+      return res.status(409).json({ error: 'duplicate', message: `${x.name}${x.batch ? ' (batch ' + x.batch + ')' : ''} is already in your stock with quantity ${x.qty}. You can edit that entry instead.`, existing: x });
+    }
+  }
   const lim = effectiveLimits(req.user);
   if (lim.maxMedicines) {
     const c = await pool.query('SELECT count(*)::int AS n FROM medicines WHERE user_id=$1', [req.user.id]);
@@ -289,7 +310,7 @@ app.delete('/api/medicines/:id', requireUser, requireAccess, wrap(async (req, re
 
 function csvCell(v) {
   const s = String(v == null ? '' : v);
-  const safe = /^[=+\-@]/.test(s) ? `'${s}` : s;
+  const safe = /^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s) ? `'${s}` : s;
   return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
@@ -317,7 +338,9 @@ app.get('/api/alerts', requireUser, requireAccess, wrap(async (req, res) => {
     totals: {
       medicines: meds.length,
       units: meds.reduce((a, m) => a + m.qty, 0),
-      stockValue: Math.round(meds.reduce((a, m) => a + m.qty * m.price, 0) * 100) / 100,
+      stockValue: Math.round(meds.filter((m) => m.days_left >= 0).reduce((a, m) => a + m.qty * m.price, 0) * 100) / 100,
+      expiredValue: Math.round(meds.filter((m) => m.days_left < 0).reduce((a, m) => a + m.qty * m.price, 0) * 100) / 100,
+      outOfStock: meds.filter((m) => m.qty === 0).length,
       remindersDue: rem.rows[0].n,
     },
   });
@@ -478,10 +501,63 @@ app.post('/api/contact', wrap(async (req, res) => {
 }));
 
 // ---------- owner admin (protected by ADMIN_KEY) ----------
-app.get('/api/admin/overview', wrap(async (req, res) => {
+function adminOk(req) {
   const key = process.env.ADMIN_KEY || '';
   const given = String(req.get('x-admin-key') || '');
-  if (!key || key.length < 12 || given !== key) {
+  if (!key || key.length < 12) return false;
+  return require('crypto').timingSafeEqual(Buffer.from(A.tokenHash(given)), Buffer.from(A.tokenHash(key)));
+}
+
+// ---------- forgot / reset password ----------
+// No email or SMS service is connected, so a reset works like this:
+// 1) the store asks on /forgot (saved as a request, same answer whether or not the account exists);
+// 2) the MedKhata team checks the request and creates a one-time link (admin key, valid 2 hours);
+// 3) the team sends that link to the store's registered mobile on WhatsApp; the store sets a new password on /reset.
+app.post('/api/password/forgot', wrap(async (req, res) => {
+  if (A.rateLimited(`forgot:${clientIp(req)}`, 5, 60 * 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Too many requests. Please try again later.' });
+  const id = str((req.body || {}).login, 120);
+  const phone = A.normalizePhone(id);
+  const email = A.normalizeEmail(id);
+  if (!phone && !email) return bad(res, 'Please enter the mobile number or email you signed up with.', 'login');
+  const r = phone ? await pool.query('SELECT id FROM users WHERE phone=$1', [phone]) : await pool.query('SELECT id FROM users WHERE email=$1', [email]);
+  if (r.rowCount) {
+    await pool.query('INSERT INTO contact_messages(name, contact, message) VALUES ($1,$2,$3)', ['Password reset request', phone || email, `User #${r.rows[0].id} asked to reset their password.`]);
+  }
+  res.json({ ok: true, message: 'Request received. If an account exists for this number or email, the MedKhata team will send a reset link to your registered mobile number on WhatsApp, usually within a few hours.' });
+}));
+
+app.post('/api/admin/reset-link', wrap(async (req, res) => {
+  if (!adminOk(req)) { await new Promise((r) => setTimeout(r, 600)); return res.status(403).json({ error: 'forbidden' }); }
+  const id = str((req.body || {}).login, 120);
+  const phone = A.normalizePhone(id);
+  const email = A.normalizeEmail(id);
+  const r = phone ? await pool.query('SELECT id, phone, store_name FROM users WHERE phone=$1', [phone])
+    : email ? await pool.query('SELECT id, phone, store_name FROM users WHERE email=$1', [email]) : { rows: [] };
+  const u = r.rows[0];
+  if (!u) return res.status(404).json({ error: 'not_found' });
+  const token = A.newToken();
+  await pool.query('DELETE FROM password_resets WHERE user_id=$1', [u.id]);
+  await pool.query("INSERT INTO password_resets(token_hash, user_id, expires_at) VALUES ($1,$2, now() + interval '2 hours')", [A.tokenHash(token), u.id]);
+  const base = process.env.PUBLIC_URL || 'https://medkhata.netlify.app';
+  res.json({ store_name: u.store_name, phone: u.phone, link: `${base}/reset?token=${token}`, expires_in_hours: 2 });
+}));
+
+app.post('/api/password/reset', wrap(async (req, res) => {
+  if (A.rateLimited(`reset:${clientIp(req)}`, 10, 60 * 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Too many attempts. Please try again later.' });
+  const b = req.body || {};
+  const password = String(b.password || '');
+  if (password.length < 8) return bad(res, 'Password must be at least 8 characters.', 'password');
+  const r = await pool.query('DELETE FROM password_resets WHERE token_hash=$1 AND expires_at > now() RETURNING user_id', [A.tokenHash(String(b.token || ''))]);
+  if (!r.rowCount) return res.status(400).json({ error: 'bad_token', message: 'This reset link is invalid or has expired. Please ask for a new one.' });
+  const userId = r.rows[0].user_id;
+  await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [A.hashPassword(password), userId]);
+  await pool.query('DELETE FROM sessions WHERE user_id=$1', [userId]);
+  await startSession(res, userId);
+  res.json({ ok: true });
+}));
+
+app.get('/api/admin/overview', wrap(async (req, res) => {
+  if (!adminOk(req)) {
     await new Promise((r) => setTimeout(r, 600));
     return res.status(403).json({ error: 'forbidden' });
   }
