@@ -1,8 +1,8 @@
 // MedKhata signup and login.
 (function () {
   function post(url, data) {
-    return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
-      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); });
+    return (window.mkWarm || Promise.resolve()).then(function () { return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); }); });
   }
   function busy(btn, on, label) { btn.disabled = on; btn.textContent = on ? 'Please wait…' : label; }
   var slow;
@@ -12,7 +12,7 @@
   function stopSlowNote(errBox) { clearTimeout(slow); errBox.className = 'alert alert-error'; errBox.hidden = true; }
 
   // Already logged in? Go straight to the app.
-  fetch('/api/me', { credentials: 'same-origin' }).then(function (r) { if (r.ok) location.replace('/app'); }).catch(function () {});
+  (window.mkWarm || Promise.resolve()).then(function () { return fetch('/api/me', { credentials: 'same-origin' }); }).then(function (r) { if (r.ok) location.replace('/app'); }).catch(function () {});
 
   var signup = document.getElementById('signup-form');
   if (signup) {

@@ -23,6 +23,16 @@
     document.body.appendChild(t); setTimeout(function () { t.remove(); }, 2800);
   }
 
+  function waitForServer() {
+    var started = Date.now();
+    function ping() {
+      return fetch('/api/health', { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('x'); }).catch(function () {
+        if (Date.now() - started > 120000) return;
+        return new Promise(function (res) { setTimeout(res, 3000); }).then(ping);
+      });
+    }
+    return ping();
+  }
   function api(method, url, body) {
     return fetch(url, { method: method, credentials: 'same-origin', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined })
       .then(function (r) {
@@ -326,7 +336,7 @@
   function showError(x) { if (x && x.message !== 'login' && x.status !== 402) toast(x.message); }
 
   // ---------- start ----------
-  Promise.all([api('GET', '/api/me'), fetch('/api/config').then(function (r) { return r.json(); })]).then(function (res) {
+  waitForServer().then(function () { return Promise.all([api('GET', '/api/me'), fetch('/api/config').then(function (r) { return r.json(); })]).then(function (res) {
     state.user = res[0].user; state.limits = res[0].limits; state.config = res[1];
     $('loading').hidden = true;
     $('store-name').textContent = state.user.store_name;
@@ -337,5 +347,5 @@
     if (state.user.status.state === 'expired') { lockApp(); return; }
     showTab(location.hash === '#plan' ? 'plan' : 'home');
     if (/welcome=1/.test(location.search)) { toast('Welcome! Your 2-day free trial has started.'); history.replaceState(null, '', '/app'); }
-  }).catch(function (x) { if (x.message !== 'login') { $('loading').textContent = 'Could not load your store. Please refresh the page.'; } });
+  }); }).catch(function (x) { if (x.message !== 'login') { $('loading').textContent = 'Could not load your store. Please refresh the page.'; } });
 })();

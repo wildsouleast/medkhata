@@ -1,3 +1,18 @@
+
+// Wake the server early (the free server sleeps when idle and can take up to a minute to start).
+window.mkWarm = (function () {
+  var started = Date.now();
+  function ping() {
+    return fetch('/api/health', { credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
+      if (r.ok) return true;
+      throw new Error('not ready');
+    }).catch(function () {
+      if (Date.now() - started > 120000) return false;
+      return new Promise(function (res) { setTimeout(res, 3000); }).then(ping);
+    });
+  }
+  return ping();
+})();
 // MedKhata marketing pages: menu, business details, contact form.
 (function () {
   var btn = document.querySelector('.menu-btn');

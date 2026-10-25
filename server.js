@@ -78,7 +78,8 @@ function clearSessionCookie(res) {
   res.set('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${PROD ? '; Secure' : ''}`);
 }
 
-function clientIp(req) { return req.ip || 'unknown'; }
+// Behind Netlify's proxy the visitor's IP arrives in x-nf-client-connection-ip.
+function clientIp(req) { return String(req.get('x-nf-client-connection-ip') || req.ip || 'unknown').slice(0, 64); }
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -160,7 +161,7 @@ app.get('/api/health', wrap(async (req, res) => {
 
 // ---------- auth ----------
 app.post('/api/signup', wrap(async (req, res) => {
-  if (A.rateLimited(`signup:${clientIp(req)}`, 10, 60 * 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Too many attempts. Please try again in a while.' });
+  if (A.rateLimited(`signup:${clientIp(req)}`, 20, 60 * 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Too many attempts. Please try again in a while.' });
   const b = req.body || {};
   const store = str(b.store_name, 80);
   const owner = str(b.owner_name, 60);
