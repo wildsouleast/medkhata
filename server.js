@@ -225,7 +225,7 @@ app.get('/api/health', wrap(async (req, res) => {
 // ---------- auth ----------
 
 // ---------- email (welcome, verification, password reset) ----------
-const PUBLIC_BASE = () => process.env.PUBLIC_URL || 'https://dawalekh.netlify.app';
+const PUBLIC_BASE = () => process.env.PUBLIC_URL || 'https://dawalekh.publicvm.com';
 async function sendVerification(user, welcome) {
   if (!MAIL.enabled() || !user.email) return false;
   const token = A.newToken();
@@ -1128,7 +1128,7 @@ app.post('/api/admin/reset-link', wrap(async (req, res) => {
   const token = A.newToken();
   await pool.query('DELETE FROM password_resets WHERE user_id=$1', [u.id]);
   await pool.query("INSERT INTO password_resets(token_hash, user_id, expires_at) VALUES ($1,$2, now() + interval '2 hours')", [A.tokenHash(token), u.id]);
-  const base = process.env.PUBLIC_URL || 'https://dawalekh.netlify.app';
+  const base = process.env.PUBLIC_URL || 'https://dawalekh.publicvm.com';
   res.json({ store_name: u.store_name, phone: u.phone, link: `${base}/reset?token=${token}`, expires_in_hours: 2 });
 }));
 

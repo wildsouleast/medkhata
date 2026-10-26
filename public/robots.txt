@@ -3,4 +3,4 @@ Allow: /
 Disallow: /app
 Disallow: /api/
 
-Sitemap: https://dawalekh.netlify.app/sitemap.xml
+Sitemap: https://dawalekh.publicvm.com/sitemap.xml
