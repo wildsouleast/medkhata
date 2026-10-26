@@ -27,7 +27,7 @@ test('API flow: signup, trial, stock, alerts, reminders, paywall, webhook', { sk
     r = await call('POST', '/api/signup', { store_name: 'Test Medical', owner_name: 'Ravi', phone: '+91 98765 43210', city: 'Gaya', password: 'secret123', accept_terms: true });
     assert.strictEqual(r.status, 201, JSON.stringify(r.body));
     assert.strictEqual(r.body.user.status.state, 'trial');
-    assert.ok(r.body.user.status.ms_left > 13.9 * 864e5 && r.body.user.status.ms_left <= 14 * 864e5, 'trial is 14 days');
+    assert.ok(r.body.user.status.ms_left > 6.9 * 864e5 && r.body.user.status.ms_left <= 7 * 864e5, 'trial is 7 days');
     const hash = (await pool.query('SELECT password_hash FROM users')).rows[0].password_hash;
     assert.ok(hash.startsWith('scrypt$') && !hash.includes('secret123'));
     r = await call('POST', '/api/signup', { store_name: 'X', owner_name: 'Ravi', phone: '9876543210', city: 'Gaya', password: 'secret123', accept_terms: true });
@@ -78,14 +78,25 @@ test('API flow: signup, trial, stock, alerts, reminders, paywall, webhook', { sk
     assert.strictEqual(r.status, 503);
     assert.strictEqual(r.body.error, 'payments_not_connected');
 
-    // trial ends -> store drops to the Free plan (nothing locked, limits apply)
+    // trial ends -> store is READ-ONLY: view + CSV download work, every change is refused (402), nothing deleted
     await pool.query("UPDATE users SET trial_ends_at = now() - interval '1 minute' WHERE phone='9876543210'");
-    assert.strictEqual((await call('GET', '/api/medicines')).status, 200);
+    const medsBefore = (await call('GET', '/api/medicines')).body.medicines.length;
+    assert.ok(medsBefore > 0);
     r = await call('GET', '/api/me');
-    assert.strictEqual(r.body.user.status.state, 'free');
-    assert.strictEqual(r.body.limits.maxMedicines, 100);
-    assert.strictEqual(r.body.limits.maxBillsPerMonth, 50);
-    assert.strictEqual((await call('GET', '/api/medicines.csv')).status, 403);
+    assert.strictEqual(r.body.user.status.state, 'expired');
+    assert.strictEqual(r.body.user.status.read_only, true);
+    assert.strictEqual(r.body.limits.readOnly, true);
+    assert.strictEqual((await call('GET', '/api/medicines.csv')).status, 200);
+    r = await call('POST', '/api/medicines', { name: 'New after trial', expiry: '2099-01-01', qty: 1, price: 1 });
+    assert.strictEqual(r.status, 402);
+    assert.strictEqual(r.body.error, 'plan_required');
+    assert.strictEqual((await call('POST', '/api/bills', { items: [] })).status, 402);
+    assert.strictEqual((await call('GET', '/api/medicines')).body.medicines.length, medsBefore);
+    // the plan page still works: config lists Basic ₹49 + Pro ₹149/₹1,499 and no free plan
+    r = await call('GET', '/api/config');
+    assert.deepStrictEqual(r.body.plans.map((p) => [p.id, p.price]), [['basic_monthly', 49], ['monthly', 149], ['yearly', 1499]]);
+    assert.strictEqual(r.body.trial_days, 7);
+    assert.strictEqual(r.body.free, undefined);
 
     // webhook marks the account active
     const uid = (await pool.query("SELECT id FROM users WHERE phone='9876543210'")).rows[0].id;

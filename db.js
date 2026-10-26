@@ -178,9 +178,16 @@ CREATE TABLE IF NOT EXISTS khata_entries (
 );
 CREATE INDEX IF NOT EXISTS khata_entries_customer_idx ON khata_entries(customer_id, entry_date);
 CREATE UNIQUE INDEX IF NOT EXISTS khata_entries_bill_uq ON khata_entries(bill_id) WHERE bill_id IS NOT NULL;
--- Trial is now 14 days: stores that never paid get their trial counted as 14 days from signup (only ever extends).
-UPDATE users SET trial_ends_at = created_at + interval '14 days'
- WHERE paid_until IS NULL AND trial_ends_at < created_at + interval '14 days';
+-- v3 (Oct 26 2026): trial is 7 days, no free plan, read-only after the trial. One-time: every store that never paid
+-- gets a fresh 7-day trial from the moment this migration first runs. Runs once (recorded in app_migrations).
+CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, ran_at TIMESTAMPTZ NOT NULL DEFAULT now());
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE name = 'v3_trial7_2026_10_26') THEN
+    UPDATE users SET trial_ends_at = now() + interval '7 days' WHERE paid_until IS NULL;
+    INSERT INTO app_migrations(name) VALUES ('v3_trial7_2026_10_26');
+  END IF;
+END $$;
 `;
 
 async function migrate(pool) {

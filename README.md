@@ -4,7 +4,7 @@ Stock, expiry and refill tracking for medical stores and clinics in India.
 
 - Marketing site + legal pages (Privacy, Terms, Refund & Cancellation, Shipping & Delivery, Contact)
 - Accounts with mobile number/email + password (scrypt hashed), cookie sessions
-- 14-day free trial (all features) that starts at signup; afterwards the store drops to the Free plan (100 medicines, 50 bills/month, 20 refill reminders), enforced on the server
+- 7-day free trial (all Pro features) that starts at signup; no free plan. Plans: Basic ₹49/30 days (100 medicines, 50 bills/month, 20 refill reminders), Pro ₹149/30 days or ₹1,499/365 days (unlimited + purchase entry + udhaar khata + CSV). With no active plan the store is read-only (GET + CSV work, every change answers 402 plan_required); nothing is deleted. Enforced on the server (lib/plans.js)
 - Dashboard: medicines (name, batch, expiry, quantity, price, low-stock level, supplier), expiry alerts (30/60/90 days), low-stock alerts, refill reminders with WhatsApp click-to-chat links, CSV export
 - Paid plan: Pro ₹149 / 30 days or ₹1,499 / 365 days (lib/plans.js), paid through Razorpay Orders (checkout + server-side signature check + webhook)
 

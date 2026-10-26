@@ -38,6 +38,7 @@
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
           if (r.status === 401) { location.replace('/login'); throw new Error('login'); }
+          if (r.status === 402 && j && j.error === 'plan_required') { setTimeout(function () { refreshMe(); readOnlyWall(); }, 0); }
           if (!r.ok) { var e = new Error((j && j.message) || (r.status === 403 ? 'This text was blocked by our security filter. Please remove special symbols and try again.' : 'Something went wrong. Please try again.')); e.status = r.status; e.j = j; throw e; }
           return j;
         });
@@ -79,6 +80,7 @@
   function renderStatus() {
     var el = $('status'); var s = state.user && state.user.status; if (!s) return;
     el.hidden = false;
+    document.body.classList.toggle('readonly', s.state === 'expired');
     var end = s.state === 'trial' ? new Date(s.trial_ends_at) : s.state === 'active' ? new Date(s.paid_until) : null;
     var left = end ? end.getTime() - Date.now() : 0;
     if (s.state === 'trial' && left > 0) {
@@ -86,13 +88,40 @@
       el.innerHTML = '<span>⏳ Free trial: <strong>' + remaining(left) + '</strong> left · sab features khule</span><button class="btn btn-primary btn-sm" type="button" data-go="plan">Plans</button>';
     } else if (s.state === 'active' && left > 0) {
       var days = Math.ceil(left / 86400000);
+      var basic = s.tier === 'basic';
       el.className = 'status active';
-      el.innerHTML = '<span>✅ ' + esc(s.plan_name) + ' active · ' + (days <= 5 ? '<strong>' + days + (days === 1 ? ' day' : ' days') + ' left</strong>' : 'till ' + fmtDate(s.paid_until)) + '</span>' + (days <= 5 ? '<button class="btn btn-primary btn-sm" type="button" data-go="plan">Renew</button>' : '');
-    } else {
-      if (s.state !== 'free') { refreshMe(); return; }
-      el.className = 'status free';
-      el.innerHTML = '<span>Free plan' + (usageLine() ? ' · ' + usageLine() : '') + '</span><button class="btn btn-primary btn-sm" type="button" data-go="plan">Pro ₹149</button>';
+      el.innerHTML = '<span>✅ ' + esc(s.plan_name) + ' active · ' + (days <= 5 ? '<strong>' + days + (days === 1 ? ' day' : ' days') + ' left</strong>' : 'till ' + fmtDate(s.paid_until)) + (basic && usageLine() ? '<br><small>' + usageLine() + '</small>' : '') + '</span>' +
+        (days <= 5 ? '<button class="btn btn-primary btn-sm" type="button" data-go="plan">Renew</button>' : basic ? '<button class="btn btn-ghost btn-sm" type="button" data-go="plan">Pro ₹149</button>' : '');
+    } else if (s.state === 'expired') {
+      el.className = 'status expired';
+      el.innerHTML = '<span>🔒 ' + (s.ended === 'paid' ? 'Plan khatam' : 'Free trial khatam') + ' · store <strong>read-only</strong> hai (data safe)</span><button class="btn btn-primary btn-sm" type="button" data-go="plan">Plan lo</button>';
+    } else { refreshMe(); }
+  }
+  // Read-only "plan lo" screen: shown once per visit when the trial/plan is over, and whenever a change is refused.
+  function readOnlyWall() {
+    var s = state.user && state.user.status;
+    document.querySelectorAll('dialog[open]').forEach(function (d) { if (d.id !== 'ro-dlg') d.close(); });
+    var d = $('ro-dlg');
+    if (!d) {
+      d = document.createElement('dialog'); d.id = 'ro-dlg'; d.className = 'ro-dlg';
+      document.body.appendChild(d);
+      d.addEventListener('click', function (e) {
+        var b = e.target.closest('button'); if (!b) return;
+        d.close(); if (b.dataset.act === 'plan') showTab('plan');
+      });
     }
+    var trialDays = (state.config && state.config.trial_days) || 7;
+    var paidEnded = s && s.ended === 'paid';
+    var plans = (state.config && state.config.plans) || [];
+    var cheapest = plans.reduce(function (m, p) { return m == null || p.price < m ? p.price : m; }, null) || 49;
+    d.innerHTML = '<div class="ro-icon" aria-hidden="true">🔒</div>' +
+      '<h2>' + (paidEnded ? 'Aapka plan khatam ho gaya' : 'Aapka ' + trialDays + ' din ka free trial khatam ho gaya') + '</h2>' +
+      '<p class="muted">Store ab <b>read-only</b> hai. Plan lete hi sab turant chalu.</p>' +
+      '<ul class="ro-list"><li>✅ Aapka sara data <b>safe</b> hai, kuch delete nahi hoga</li><li>👀 Stock, purane bill, udhaar sab <b>dekh</b> sakte ho, CSV download bhi</li><li>🚫 Naya bill, purchase ya badlav ke liye plan chahiye</li></ul>' +
+      '<div class="ro-prices"><span><b>Basic ₹' + cheapest + '</b>/mahina</span><span><b>Pro ₹149</b>/mahina</span></div>' +
+      '<button class="btn btn-primary btn-block" type="button" data-act="plan">Plan lo, ₹' + cheapest + ' se</button>' +
+      '<button class="btn btn-ghost btn-block" type="button" data-act="close">Abhi sirf dekhna hai</button>';
+    if (!d.open) d.showModal();
   }
   var refreshing = false;
   function refreshMe() {
@@ -102,7 +131,7 @@
   }
   function applyLimits() {
     [$('csv-stock'), $('csv-rem')].forEach(function (a) {
-      if (!state.limits.csvExport) { a.setAttribute('aria-disabled', 'true'); a.dataset.reason = 'CSV download Pro plan mein hai (₹149/month).'; }
+      if (!state.limits.csvExport) { a.setAttribute('aria-disabled', 'true'); a.dataset.reason = 'CSV download Pro plan mein hai (₹149/mahina).'; }
       else a.removeAttribute('aria-disabled');
     });
   }
@@ -111,6 +140,7 @@
   // ---------- tabs ----------
   function showTab(name) {
     state.tab = name;
+    if (document.body.classList.contains('readonly') && (name === 'newbill' || name === 'purchaseform')) { readOnlyWall(); return; }
     var NAV = { newbill: 'bills', billview: 'bills', purchases: 'stock', purchaseform: 'stock', customer: 'udhaar', refills: 'more', plan: 'more' };
     var navName = NAV[name] || name;
     document.querySelectorAll('.tabs button').forEach(function (b) { b.setAttribute('aria-selected', b.dataset.tab === navName ? 'true' : 'false'); });
@@ -136,7 +166,7 @@
     return html + '<div class="list">' + list.map(function (m) { return medRow(m, extraFn && extraFn(m)); }).join('') + '</div></div>';
   }
   function loadHome() {
-    if (state.user && state.user.status.state === 'free') refreshMe();
+    if (state.user && (state.user.status.state === 'expired' || state.user.status.tier === 'basic')) refreshMe();
     return api('GET', '/api/alerts').then(function (a) {
       state.alertsMeds = [].concat(a.expired, a.within30, a.within60, a.within90, a.lowStock);
       var t = a.totals;
@@ -491,18 +521,19 @@
     if (!cfg.payments.enabled) note = '<div class="alert alert-warn" style="margin-bottom:14px">Online payments are being set up and will be available soon. Your trial and data are not affected.</div>';
     else if (cfg.payments.test_mode) note = '<div class="test-note">🧪 Test mode — no real money is charged</div>';
     $('pay-note').innerHTML = note;
-    var cur, free = cfg.free || { max_medicines: 100, max_bills_per_month: 50, features: [] };
-    var fmtEnd = function (d) { return new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); };
-    if (s.state === 'trial') cur = '<h3>Free trial (' + (cfg.trial_days || 14) + ' din)</h3><p class="muted" style="margin:0">Sab features <strong>' + fmtEnd(s.trial_ends_at) + '</strong> tak khule. Uske baad store apne aap <b>Free plan</b> pe chala jayega (' + free.max_medicines + ' dawai, ' + free.max_bills_per_month + ' bill/mahina) — data safe rahega. Pro kabhi bhi lein; paid din trial ke baad shuru honge.</p>';
-    else if (s.state === 'active') cur = '<h3>' + esc(s.plan_name) + '</h3><p class="muted" style="margin:0">Active till <strong>' + fmtDate(s.paid_until) + '</strong>. Dobara pay karne pe din aage jud jayenge.</p>';
-    else cur = '<h3>Free plan</h3><p class="muted" style="margin:0">' + (usageLine() ? 'Use: <strong>' + usageLine() + '</strong>. ' : '') + 'Limit poori hone pe purana data safe rahega; nayi dawai/bill ke liye Pro lein.</p>';
+    var cur, fmtEnd = function (d) { return new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); };
+    var minPrice = cfg.plans.reduce(function (m, p) { return m == null || p.price < m ? p.price : m; }, null);
+    if (s.state === 'trial') cur = '<h3>Free trial (' + (cfg.trial_days || 7) + ' din)</h3><p class="muted" style="margin:0">Sab Pro features <strong>' + fmtEnd(s.trial_ends_at) + '</strong> tak khule. Uske baad store <b>read-only</b> ho jayega: data safe rahega, dekh aur download kar sakte ho, par naya bill banane ke liye plan lena hoga (Basic ₹' + minPrice + '/mahina se). Plan kabhi bhi lein; paid din trial ke baad shuru honge.</p>';
+    else if (s.state === 'active') cur = '<h3>' + esc(s.plan_name) + '</h3><p class="muted" style="margin:0">Active till <strong>' + fmtDate(s.paid_until) + '</strong>. Dobara pay karne pe din aage jud jayenge.' + (s.tier === 'basic' && usageLine() ? ' Use: <strong>' + usageLine() + '</strong>.' : '') + '</p>';
+    else cur = '<div class="ro-head"><h3>🔒 Store read-only hai</h3><p style="margin:0">' + (s.ended === 'paid' ? 'Aapka plan khatam ho gaya.' : 'Aapka ' + (cfg.trial_days || 7) + ' din ka free trial khatam ho gaya.') + ' Aapka sara data safe hai. Stock, bill aur udhaar dekh sakte ho, CSV download kar sakte ho. <b>Naya bill / purchase ke liye neeche se plan lo.</b></p></div>';
     $('plan-current').innerHTML = cur;
-    var freeCard = '<div class="card' + (s.state === 'free' ? ' current' : '') + '"><h3 style="margin:0">Free' + (s.state === 'free' ? ' <span class="badge b-green">Current</span>' : '') + '</h3><div class="price">₹0<small> / hamesha</small></div><ul>' + free.features.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul></div>';
-    $('plan-cards').innerHTML = freeCard + cfg.plans.map(function (p) {
+    $('plan-cards').innerHTML = cfg.plans.map(function (p) {
       var isCur = s.state === 'active' && s.plan === p.id;
       var per = p.period === 'year' ? ' / saal' : ' / mahina';
-      var save = p.period === 'year' ? '<div class="save-tag">₹' + (149 * 12 - p.price) + ' bachao (₹' + Math.round(p.price / 12) + '/mahina)</div>' : '';
-      return '<div class="card' + (isCur ? ' current' : '') + (p.period === 'year' ? ' best' : '') + '"><h3 style="margin:0">' + esc(p.name) + (isCur ? ' <span class="badge b-green">Current</span>' : '') + '</h3><div class="price">₹' + p.price.toLocaleString('en-IN') + '<small>' + per + '</small></div>' + save + '<ul>' + p.features.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>' +
+      var monthlyPro = cfg.plans.filter(function (q) { return q.tier === 'pro' && q.period === 'month'; })[0];
+      var save = p.period === 'year' && monthlyPro ? '<div class="save-tag">₹' + (monthlyPro.price * 12 - p.price).toLocaleString('en-IN') + ' bachao (₹' + Math.round(p.price / 12) + '/mahina)</div>' : '';
+      var tag = p.tier === 'basic' ? '<div class="muted" style="font-size:.9rem">Chhoti dukaan ke liye</div>' : '';
+      return '<div class="card' + (isCur ? ' current' : '') + (p.period === 'year' ? ' best' : '') + '"><h3 style="margin:0">' + esc(p.name) + (isCur ? ' <span class="badge b-green">Current</span>' : '') + '</h3>' + tag + '<div class="price">₹' + p.price.toLocaleString('en-IN') + '<small>' + per + '</small></div>' + save + '<ul>' + p.features.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>' +
         '<button class="btn ' + (p.period === 'year' ? 'btn-primary' : 'btn-ghost') + ' btn-block" type="button" data-pay="' + p.id + '"' + (cfg.payments.enabled ? '' : ' disabled') + '>' + (isCur ? 'Renew' : 'Pay') + ' ₹' + p.price.toLocaleString('en-IN') + '</button></div>';
     }).join('');
     var f = $('profile-form'); f.store_name.value = u.store_name; f.owner_name.value = u.owner_name; f.city.value = u.city; f.store_address.value = u.store_address || ''; f.gstin.value = u.gstin || ''; f.drug_licence.value = u.drug_licence || '';
@@ -511,7 +542,7 @@
       if (!r.payments.length) { $('pay-history').textContent = 'No payments yet.'; return; }
       $('pay-history').innerHTML = '<div class="list">' + r.payments.map(function (p) {
         var st = p.status === 'paid' ? '<span class="badge b-green">Paid</span>' : '<span class="badge b-red">Failed</span>';
-        var PN = { monthly: 'Pro (monthly)', yearly: 'Pro (yearly)', clinic: 'Clinic+', basic: 'Basic', pro: 'Pro' };
+        var PN = { basic_monthly: 'Basic', monthly: 'Pro (monthly)', yearly: 'Pro (yearly)', clinic: 'Clinic+', basic: 'Basic (old)', pro: 'Pro' };
         return '<div class="item"><div class="main"><b>' + esc(PN[p.plan] || p.plan) + ' · ' + rupees(p.amount_paise / 100) + (p.live_mode ? '' : ' <span class="badge b-yellow">Test</span>') + '</b><small>' + fmtDate(p.paid_at || p.created_at) + (p.razorpay_payment_id ? ' · ' + esc(p.razorpay_payment_id) : '') + '</small></div><div class="side">' + st + '</div></div>';
       }).join('') + '</div>';
     }).catch(function () {});
@@ -807,8 +838,9 @@
     applyLimits();
     renderStatus();
     state.timer = setInterval(renderStatus, 30000);
+    if (state.user.status.state === 'expired' && !sessionStorage.getItem('ro-seen')) { sessionStorage.setItem('ro-seen', '1'); setTimeout(readOnlyWall, 300); }
     var start = (location.hash || '').slice(1);
     showTab(['plan', 'udhaar', 'purchases', 'bills', 'stock', 'refills'].indexOf(start) >= 0 ? start : 'home');
-    if (/welcome=1/.test(location.search)) { toast('Welcome! Aapka ' + ((state.config && state.config.trial_days) || 14) + '-din ka free trial shuru ho gaya.'); history.replaceState(null, '', '/app'); }
+    if (/welcome=1/.test(location.search)) { toast('Welcome! Aapka ' + ((state.config && state.config.trial_days) || 7) + '-din ka free trial shuru ho gaya.'); history.replaceState(null, '', '/app'); }
   }); }).catch(function (x) { if (x.message !== 'login') { $('loading').textContent = 'Could not load your store. Please refresh the page.'; } });
 })();

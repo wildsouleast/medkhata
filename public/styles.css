@@ -431,3 +431,16 @@ dialog::backdrop{background:rgba(15,23,42,.5)}
 #bv-udhaar{white-space:nowrap}
 .pf-line .row2{grid-template-columns:1fr 1.3fr;gap:8px}
 .pf-line .row2 input{min-width:0}
+
+/* v3: read-only "plan lo" screen */
+.ro-dlg{border:0;border-radius:18px;padding:22px 18px 16px;width:min(92vw,400px);box-shadow:0 20px 60px rgba(0,0,0,.25);text-align:center}
+.ro-dlg::backdrop{background:rgba(15,23,42,.55)}
+.ro-dlg h2{margin:6px 0 6px;font-size:1.25rem;line-height:1.3}
+.ro-dlg .ro-icon{font-size:2.4rem;line-height:1}
+.ro-dlg .ro-list{list-style:none;padding:0;margin:14px 0;text-align:left;display:grid;gap:8px}
+.ro-dlg .ro-list li{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:9px 11px;font-size:.95rem}
+.ro-dlg .ro-prices{display:flex;gap:8px;justify-content:center;margin:4px 0 14px;flex-wrap:wrap}
+.ro-dlg .ro-prices span{background:var(--brand-xl,#ccfbf1);border-radius:999px;padding:6px 12px;font-size:.95rem}
+.ro-dlg .btn{margin-top:8px}
+.ro-head{background:var(--red-l,#fee2e2);border:1px solid #fecaca;color:#7f1d1d;border-radius:12px;padding:12px 14px}
+.ro-head h3{margin:0 0 6px}

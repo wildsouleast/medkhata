@@ -5,7 +5,7 @@ const { makePool, migrate } = require('./db');
 const A = require('./lib/auth');
 const RZ = require('./lib/razorpay');
 const MAIL = require('./lib/mailer');
-const { PLANS, FREE, TRIAL_DAYS, TRIAL_HOURS, planName, planDays, limitsFor } = require('./lib/plans');
+const { PLANS, BASIC, READ_ONLY, TRIAL_DAYS, TRIAL_HOURS, planName, planDays, planTier, limitsFor } = require('./lib/plans');
 
 const app = express();
 const pool = makePool();
@@ -89,20 +89,20 @@ function accountStatus(u) {
   const trialEnds = new Date(u.trial_ends_at).getTime();
   const paidUntil = u.paid_until ? new Date(u.paid_until).getTime() : 0;
   if (paidUntil > now) {
-    return { state: 'active', plan: u.plan, plan_name: planName(u.plan), paid_until: u.paid_until, ms_left: paidUntil - now };
+    return { state: 'active', plan: u.plan, tier: planTier(u.plan), plan_name: planName(u.plan), paid_until: u.paid_until, ms_left: paidUntil - now };
   }
   if (trialEnds > now && !u.paid_until) {
     return { state: 'trial', plan: 'trial', plan_name: 'Free trial', trial_ends_at: u.trial_ends_at, ms_left: trialEnds - now };
   }
-  // Trial or paid period over: the store drops to the Free plan (limits apply, nothing is locked or deleted).
-  return { state: 'free', plan: 'free', plan_name: 'Free', ended_at: u.paid_until || u.trial_ends_at, ended: u.paid_until ? 'paid' : 'trial', ms_left: 0 };
+  // Trial or paid period over, no payment: the store is READ-ONLY (view + download everything, add nothing). Nothing is deleted.
+  return { state: 'expired', plan: 'expired', plan_name: 'Read-only', read_only: true, ended_at: u.paid_until || u.trial_ends_at, ended: u.paid_until ? 'paid' : 'trial', ms_left: 0 };
 }
 
 function effectiveLimits(u) {
-  return limitsFor(accountStatus(u).state);
+  return limitsFor(accountStatus(u).state, u.plan);
 }
 
-// Bills made this calendar month (India time); the Free plan allows FREE.maxBillsPerMonth.
+// Bills made this calendar month (India time); the Basic plan allows BASIC.maxBillsPerMonth.
 async function billsThisMonth(db, userId) {
   const r = await db.query(
     `SELECT count(*)::int AS n FROM bills WHERE user_id=$1
@@ -134,13 +134,25 @@ const requireUser = wrap(async (req, res, next) => {
   next();
 });
 
-// Server-side trial / subscription gate.
+// Server-side trial / subscription gate. An expired store is read-only: GET (view, CSV download) works, every change is refused.
+const READ_ONLY_MSG = 'Aapka free trial / plan khatam ho gaya. Store abhi read-only hai: sab dekh sakte hain aur download kar sakte hain, par naya bill, purchase ya badlav ke liye plan lein (Basic ₹49/mahina se). Aapka data safe hai, kuch delete nahi hoga. / Your trial or plan has ended; the store is read-only until you choose a plan. Your data is safe.';
 function requireAccess(req, res, next) {
   const s = accountStatus(req.user);
-  if (s.state === 'expired') {
-    return res.status(402).json({ error: 'plan_required', message: 'Your free trial has ended. Choose a plan to continue. Your data is safe.' });
+  if (s.state === 'expired' && req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(402).json({ error: 'plan_required', read_only: true, message: READ_ONLY_MSG });
   }
   next();
+}
+
+// Pro-only features (purchase entry, udhaar khata): available in the trial and on Pro; Basic can view what it already has.
+function proRequired(res, what) {
+  return res.status(403).json({ error: 'pro_required', message: `${what} Pro plan mein hai (₹149/mahina ya ₹1,499/saal). Basic plan (₹49) mein ye nahi hai. / ${what} needs the Pro plan.` });
+}
+function requirePro(what) {
+  return (req, res, next) => (effectiveLimits(req.user).purchases ? next() : proRequired(res, what));
+}
+function limitMsg(lim, what) {
+  return `${lim.name} plan mein ${what} tak. Unlimited ke liye Pro lein (₹149/mahina). / The ${lim.name} plan allows up to ${what}.`;
 }
 
 async function startSession(res, userId) {
@@ -166,8 +178,9 @@ app.get('/api/config', (req, res) => {
   const c = RZ.config();
   res.json({
     payments: { enabled: c.enabled, test_mode: c.enabled && !c.liveMode, key_id: c.enabled ? c.keyId : null },
-    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, period: p.period, days: p.days, features: p.features })),
-    free: { name: FREE.name, max_medicines: FREE.maxMedicines, max_bills_per_month: FREE.maxBillsPerMonth, max_reminders: FREE.maxReminders, features: FREE.features },
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, tier: p.tier, name: p.name, price: p.price, period: p.period, days: p.days, features: p.features })),
+    basic: { name: BASIC.name, max_medicines: BASIC.maxMedicines, max_bills_per_month: BASIC.maxBillsPerMonth, max_reminders: BASIC.maxReminders },
+    after_trial: 'read_only',
     trial_hours: TRIAL_HOURS,
     trial_days: TRIAL_DAYS,
     email_enabled: MAIL.enabled(),
@@ -327,7 +340,7 @@ app.post('/api/medicines', requireUser, requireAccess, wrap(async (req, res) => 
   const lim = effectiveLimits(req.user);
   if (lim.maxMedicines) {
     const c = await pool.query('SELECT count(*)::int AS n FROM medicines WHERE user_id=$1', [req.user.id]);
-    if (c.rows[0].n >= lim.maxMedicines) return res.status(403).json({ error: 'limit', message: `Free plan mein ${lim.maxMedicines} dawai tak. Unlimited ke liye Pro lein (₹149/month). / The Free plan allows up to ${lim.maxMedicines} medicines.` });
+    if (c.rows[0].n >= lim.maxMedicines) return res.status(403).json({ error: 'limit', message: limitMsg(lim, `${lim.maxMedicines} dawai`) });
   }
   const r = await pool.query(
     `INSERT INTO medicines(user_id, name, batch, expiry, qty, price, min_qty, supplier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${MED_COLS}`,
@@ -360,7 +373,7 @@ function csvCell(v) {
 }
 
 app.get('/api/medicines.csv', requireUser, requireAccess, wrap(async (req, res) => {
-  if (!effectiveLimits(req.user).csvExport) return res.status(403).json({ error: 'limit', message: 'CSV download Pro plan mein hai. / CSV download is part of the Pro plan.' });
+  if (!effectiveLimits(req.user).csvExport) return res.status(403).json({ error: 'limit', message: 'CSV download Pro plan mein hai (₹149/mahina). / CSV download is part of the Pro plan.' });
   const r = await pool.query(`SELECT ${MED_COLS} FROM medicines WHERE user_id=$1 ORDER BY expiry ASC, name ASC`, [req.user.id]);
   const lines = [['Medicine', 'Batch', 'Expiry', 'Days left', 'Quantity', 'Price (Rs)', 'Low-stock level', 'Supplier'].join(',')];
   r.rows.forEach((m) => lines.push([m.name, m.batch, m.expiry, m.days_left, m.qty, m.price, m.min_qty, m.supplier].map(csvCell).join(',')));
@@ -455,6 +468,7 @@ app.post('/api/bills', requireUser, requireAccess, wrap(async (req, res) => {
   const gstPct = gstMode === 'none' ? 0 : Number(body.gst_percent);
   if (!Number.isFinite(gstPct) || gstPct < 0 || gstPct > 28) return bad(res, 'GST % should be between 0 and 28.');
   const asUdhaar = body.udhaar === true;
+  if (asUdhaar && !effectiveLimits(req.user).khata) return proRequired(res, 'Udhaar khata');
   if (asUdhaar && customerName.length < 2) return bad(res, 'Udhaar ke liye customer ka naam likhein. / Enter the customer name for udhaar.', 'customer_name');
 
   const client = await pool.connect();
@@ -465,7 +479,7 @@ app.post('/api/bills', requireUser, requireAccess, wrap(async (req, res) => {
     const blim = effectiveLimits(req.user);
     if (blim.maxBillsPerMonth && (await billsThisMonth(client, req.user.id)) >= blim.maxBillsPerMonth) {
       await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'limit', message: `Free plan mein mahine ke ${blim.maxBillsPerMonth} bill tak. Aur bill ke liye Pro lein (₹149/month). / The Free plan allows ${blim.maxBillsPerMonth} bills a month.` });
+      return res.status(403).json({ error: 'limit', message: limitMsg(blim, `mahine ke ${blim.maxBillsPerMonth} bill`) });
     }
     const ids = [...new Set(lines.map((l) => l.id))];
     const mq = await client.query(`SELECT ${MED_COLS} FROM medicines WHERE user_id=$1 AND id = ANY($2::int[]) FOR UPDATE`, [req.user.id, ids]);
@@ -567,7 +581,7 @@ app.post('/api/reminders', requireUser, requireAccess, wrap(async (req, res) => 
   const lim = effectiveLimits(req.user);
   if (lim.maxReminders) {
     const c = await pool.query('SELECT count(*)::int AS n FROM reminders WHERE user_id=$1', [req.user.id]);
-    if (c.rows[0].n >= lim.maxReminders) return res.status(403).json({ error: 'limit', message: `Free plan mein ${lim.maxReminders} refill reminders tak. Unlimited ke liye Pro lein. / The Free plan allows up to ${lim.maxReminders} refill reminders.` });
+    if (c.rows[0].n >= lim.maxReminders) return res.status(403).json({ error: 'limit', message: limitMsg(lim, `${lim.maxReminders} refill reminders`) });
   }
   const q = await pool.query(
     `INSERT INTO reminders(user_id, patient_name, phone, medicine, every_days, next_due) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${REM_COLS}`,
@@ -604,7 +618,7 @@ app.delete('/api/reminders/:id', requireUser, requireAccess, wrap(async (req, re
 }));
 
 app.get('/api/reminders.csv', requireUser, requireAccess, wrap(async (req, res) => {
-  if (!effectiveLimits(req.user).csvExport) return res.status(403).json({ error: 'limit', message: 'CSV download Pro plan mein hai. / CSV download is part of the Pro plan.' });
+  if (!effectiveLimits(req.user).csvExport) return res.status(403).json({ error: 'limit', message: 'CSV download Pro plan mein hai (₹149/mahina). / CSV download is part of the Pro plan.' });
   const q = await pool.query(`SELECT ${REM_COLS} FROM reminders WHERE user_id=$1 ORDER BY next_due ASC`, [req.user.id]);
   const lines = [['Patient', 'Mobile', 'Medicine', 'Every (days)', 'Next refill'].join(',')];
   q.rows.forEach((r) => lines.push([r.patient_name, r.phone, r.medicine, r.every_days, r.next_due].map(csvCell).join(',')));
@@ -654,7 +668,7 @@ async function applyPurchaseItems(client, user, purchaseId, p) {
       if (lim.maxMedicines) {
         const c = await client.query('SELECT count(*)::int AS n FROM medicines WHERE user_id=$1', [user.id]);
         if (c.rows[0].n >= lim.maxMedicines) {
-          const err = new Error('limit'); err.limitMessage = `Free plan mein ${lim.maxMedicines} dawai tak. "${x.name}" nayi dawai hai, isliye nahi jud saki. Pro lein (₹149/month). / The Free plan allows up to ${lim.maxMedicines} medicines.`; throw err;
+          const err = new Error('limit'); err.limitMessage = `${lim.name} plan mein ${lim.maxMedicines} dawai tak. "${x.name}" nayi dawai hai, isliye nahi jud saki. Pro lein (₹149/mahina). / The ${lim.name} plan allows up to ${lim.maxMedicines} medicines.`; throw err;
         }
       }
       const ins = await client.query('INSERT INTO medicines(user_id, name, batch, expiry, qty, price, purchase_rate, supplier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
@@ -724,7 +738,7 @@ app.get('/api/purchases/:id', requireUser, requireAccess, wrap(async (req, res) 
   res.json({ purchase: await purchaseWithItems(pool, own.rows[0].id) });
 }));
 
-app.post('/api/purchases', requireUser, requireAccess, wrap(async (req, res) => {
+app.post('/api/purchases', requireUser, requireAccess, requirePro('Purchase entry'), wrap(async (req, res) => {
   const { p, error } = readPurchase(req.body || {});
   if (error) return bad(res, error);
   try {
@@ -742,7 +756,7 @@ app.post('/api/purchases', requireUser, requireAccess, wrap(async (req, res) => 
   }
 }));
 
-app.put('/api/purchases/:id', requireUser, requireAccess, wrap(async (req, res) => {
+app.put('/api/purchases/:id', requireUser, requireAccess, requirePro('Purchase entry'), wrap(async (req, res) => {
   const { p, error } = readPurchase(req.body || {});
   if (error) return bad(res, error);
   try {
@@ -765,7 +779,7 @@ app.put('/api/purchases/:id', requireUser, requireAccess, wrap(async (req, res) 
   }
 }));
 
-app.delete('/api/purchases/:id', requireUser, requireAccess, wrap(async (req, res) => {
+app.delete('/api/purchases/:id', requireUser, requireAccess, requirePro('Purchase entry'), wrap(async (req, res) => {
   const out = await inTx(async (client) => {
     const own = await client.query('SELECT id FROM purchases WHERE id=$1 AND user_id=$2 FOR UPDATE', [Number(req.params.id) || 0, req.user.id]);
     if (!own.rowCount) return { rollback: true, notFound: true };
@@ -806,7 +820,7 @@ app.get('/api/khata', requireUser, requireAccess, wrap(async (req, res) => {
   res.json({ customers: q.rows, total_due: round2(owing.reduce((s, r) => s + r.balance, 0)), owing_count: owing.length });
 }));
 
-app.post('/api/khata/customers', requireUser, requireAccess, wrap(async (req, res) => {
+app.post('/api/khata/customers', requireUser, requireAccess, requirePro('Udhaar khata'), wrap(async (req, res) => {
   const { c, error } = readCustomer(req.body || {});
   if (error) return bad(res, error);
   if (c.phone) {
@@ -828,7 +842,7 @@ app.get('/api/khata/customers/:id', requireUser, requireAccess, wrap(async (req,
   res.json({ customer: c.rows[0], entries: entries.reverse() });
 }));
 
-app.put('/api/khata/customers/:id', requireUser, requireAccess, wrap(async (req, res) => {
+app.put('/api/khata/customers/:id', requireUser, requireAccess, requirePro('Udhaar khata'), wrap(async (req, res) => {
   const { c, error } = readCustomer(req.body || {});
   if (error) return bad(res, error);
   const r = await pool.query('UPDATE customers SET name=$1, phone=$2 WHERE id=$3 AND user_id=$4 RETURNING id, name, phone', [c.name, c.phone, Number(req.params.id) || 0, req.user.id]);
@@ -836,7 +850,7 @@ app.put('/api/khata/customers/:id', requireUser, requireAccess, wrap(async (req,
   res.json({ customer: r.rows[0] });
 }));
 
-app.delete('/api/khata/customers/:id', requireUser, requireAccess, wrap(async (req, res) => {
+app.delete('/api/khata/customers/:id', requireUser, requireAccess, requirePro('Udhaar khata'), wrap(async (req, res) => {
   const r = await pool.query('DELETE FROM customers WHERE id=$1 AND user_id=$2', [Number(req.params.id) || 0, req.user.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'not_found', message: 'Customer not found.' });
   res.json({ ok: true });
@@ -848,6 +862,7 @@ app.post('/api/khata/entries', requireUser, requireAccess, wrap(async (req, res)
   const b = req.body || {};
   const kind = b.kind === 'payment' ? 'payment' : b.kind === 'udhaar' ? 'udhaar' : null;
   if (!kind) return bad(res, 'Choose udhaar or payment.');
+  if (kind === 'udhaar' && !effectiveLimits(req.user).khata) return proRequired(res, 'Udhaar khata');
   const amount = round2(Number(b.amount));
   if (!Number.isFinite(amount) || amount <= 0 || amount > 10000000) return bad(res, 'Amount sahi likhein (0 se zyada). / Enter a valid amount.', 'amount');
   const date = b.entry_date ? str(b.entry_date, 10) : istDate(0);
@@ -879,7 +894,7 @@ app.post('/api/khata/entries', requireUser, requireAccess, wrap(async (req, res)
   res.status(out.status).json(out.body);
 }));
 
-app.delete('/api/khata/entries/:id', requireUser, requireAccess, wrap(async (req, res) => {
+app.delete('/api/khata/entries/:id', requireUser, requireAccess, requirePro('Udhaar khata'), wrap(async (req, res) => {
   const r = await pool.query('DELETE FROM khata_entries WHERE id=$1 AND user_id=$2', [Number(req.params.id) || 0, req.user.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'not_found', message: 'Entry not found.' });
   res.json({ ok: true });
