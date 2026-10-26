@@ -390,3 +390,44 @@ dialog::backdrop{background:rgba(15,23,42,.5)}
   .invoice{box-shadow:none;margin:0}
   .invoice.inv-a4{max-width:none}
 }
+
+/* v2 Oct 26: quick actions, purchase entry, udhaar khata, free plan */
+.tabs{grid-template-columns:repeat(5,1fr)}
+.quick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 16px}
+.q{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;font:inherit;color:var(--ink);cursor:pointer;min-height:76px;box-shadow:var(--shadow)}
+.q b{font-size:.98rem}.q small{color:var(--mut);font-size:.8rem}
+.q-ic{font-size:1.35rem;line-height:1}
+.q-bill{border-left:4px solid var(--brand)}.q-pur{border-left:4px solid var(--blue)}.q-udh{border-left:4px solid var(--red)}.q-med{border-left:4px solid var(--amber)}
+@media (min-width:700px){.quick{grid-template-columns:repeat(4,1fr)}}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.row3 input{min-width:0}
+.pf-line{padding:14px;margin-bottom:12px}
+.pf-line .field{margin-bottom:8px}
+.pf-line-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.pf-amt{text-align:right;min-height:1.2em}
+.pf-total{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+.pf-total strong{font-size:1.35rem}
+.linkbtn{background:none;border:0;padding:4px 2px;font:inherit;color:var(--brand);font-weight:700;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.linkbtn.danger{color:var(--red)}
+.check-row{display:flex;gap:10px;align-items:flex-start;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:0 0 12px;cursor:pointer}
+.check-row input{width:22px;height:22px;margin-top:1px;flex:none;accent-color:var(--red)}
+.li-row{width:100%;text-align:left;font:inherit;cursor:pointer;color:var(--ink)}
+@media (max-width:560px){.item.li-row{flex-direction:row;align-items:center}.item.li-row .main{width:auto}.item.li-row .side{width:auto;flex-direction:column;align-items:flex-end;gap:2px}}
+.due{color:var(--red)}.ok{color:var(--green)}
+.due-card{background:#fff1f2;border-color:#fecdd3}
+.due-card strong.sm{font-size:1.05rem}
+.cu-acts{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cu-acts .btn-wa{grid-column:1/-1}
+.cu-acts .btn{min-height:50px}
+.btn-danger-soft{background:var(--red-l);color:#991b1b;border-color:#fecaca}.btn-danger-soft:hover{background:#fecaca;color:#7f1d1d}
+.k-entry .side small{font-size:.8rem}
+.more-list{display:grid;gap:10px}
+.more-item{display:grid;grid-template-columns:40px 1fr;grid-template-rows:auto auto;column-gap:10px;align-items:center;text-align:left;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;font:inherit;color:var(--ink);cursor:pointer;min-height:68px}
+.more-item span{grid-row:1/3;font-size:1.5rem;text-align:center}
+.more-item small{color:var(--mut)}
+.status.free{background:var(--brand-xl);border:1px solid #99f6e4;color:#134e4a}
+.plan-cards .best{border:2px solid var(--brand-2)}
+.save-tag{display:inline-block;background:var(--green-l);color:#14532d;font-weight:700;font-size:.82rem;border-radius:999px;padding:2px 10px;margin-top:4px}
+#bv-udhaar{white-space:nowrap}
+.pf-line .row2{grid-template-columns:1fr 1.3fr;gap:8px}
+.pf-line .row2 input{min-width:0}

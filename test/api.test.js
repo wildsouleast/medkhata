@@ -27,7 +27,7 @@ test('API flow: signup, trial, stock, alerts, reminders, paywall, webhook', { sk
     r = await call('POST', '/api/signup', { store_name: 'Test Medical', owner_name: 'Ravi', phone: '+91 98765 43210', city: 'Gaya', password: 'secret123', accept_terms: true });
     assert.strictEqual(r.status, 201, JSON.stringify(r.body));
     assert.strictEqual(r.body.user.status.state, 'trial');
-    assert.ok(r.body.user.status.ms_left > 47 * 3600e3);
+    assert.ok(r.body.user.status.ms_left > 13.9 * 864e5 && r.body.user.status.ms_left <= 14 * 864e5, 'trial is 14 days');
     const hash = (await pool.query('SELECT password_hash FROM users')).rows[0].password_hash;
     assert.ok(hash.startsWith('scrypt$') && !hash.includes('secret123'));
     r = await call('POST', '/api/signup', { store_name: 'X', owner_name: 'Ravi', phone: '9876543210', city: 'Gaya', password: 'secret123', accept_terms: true });
@@ -74,19 +74,22 @@ test('API flow: signup, trial, stock, alerts, reminders, paywall, webhook', { sk
     cookie = mine;
 
     // payments not connected
-    r = await call('POST', '/api/billing/order', { plan: 'pro' });
+    r = await call('POST', '/api/billing/order', { plan: 'monthly' });
     assert.strictEqual(r.status, 503);
     assert.strictEqual(r.body.error, 'payments_not_connected');
 
-    // trial ends -> server blocks
+    // trial ends -> store drops to the Free plan (nothing locked, limits apply)
     await pool.query("UPDATE users SET trial_ends_at = now() - interval '1 minute' WHERE phone='9876543210'");
-    assert.strictEqual((await call('GET', '/api/medicines')).status, 402);
-    assert.strictEqual((await call('POST', '/api/medicines', { name: 'X', expiry: day(5), qty: 1, price: 1 })).status, 402);
-    assert.strictEqual((await call('GET', '/api/me')).body.user.status.state, 'expired');
+    assert.strictEqual((await call('GET', '/api/medicines')).status, 200);
+    r = await call('GET', '/api/me');
+    assert.strictEqual(r.body.user.status.state, 'free');
+    assert.strictEqual(r.body.limits.maxMedicines, 100);
+    assert.strictEqual(r.body.limits.maxBillsPerMonth, 50);
+    assert.strictEqual((await call('GET', '/api/medicines.csv')).status, 403);
 
     // webhook marks the account active
     const uid = (await pool.query("SELECT id FROM users WHERE phone='9876543210'")).rows[0].id;
-    await pool.query("INSERT INTO payments(user_id, plan, amount_paise, razorpay_order_id) VALUES ($1,'pro',59900,'order_TEST1')", [uid]);
+    await pool.query("INSERT INTO payments(user_id, plan, amount_paise, razorpay_order_id) VALUES ($1,'monthly',14900,'order_TEST1')", [uid]);
     const payload = JSON.stringify({ event: 'order.paid', created_at: 1, payload: { payment: { entity: { id: 'pay_TEST1', order_id: 'order_TEST1' } }, order: { entity: { id: 'order_TEST1' } } } });
     assert.strictEqual((await call('POST', '/api/razorpay/webhook', payload, { 'x-razorpay-signature': 'bad' })).status, 400);
     const sig = crypto.createHmac('sha256', 'whsec_test_123').update(payload).digest('hex');
@@ -96,7 +99,7 @@ test('API flow: signup, trial, stock, alerts, reminders, paywall, webhook', { sk
     assert.strictEqual(r.body.duplicate, true);
     r = await call('GET', '/api/me');
     assert.strictEqual(r.body.user.status.state, 'active');
-    assert.strictEqual(r.body.user.status.plan, 'pro');
+    assert.strictEqual(r.body.user.status.plan, 'monthly');
     const days = r.body.user.status.ms_left / 864e5;
     assert.ok(days > 29.9 && days <= 30.01, `paid days ${days}`);
     assert.strictEqual((await call('GET', '/api/medicines')).status, 200);

@@ -38,7 +38,6 @@
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
           if (r.status === 401) { location.replace('/login'); throw new Error('login'); }
-          if (r.status === 402) { state.user && (state.user.status.state = 'expired'); renderStatus(); lockApp(); }
           if (!r.ok) { var e = new Error((j && j.message) || (r.status === 403 ? 'This text was blocked by our security filter. Please remove special symbols and try again.' : 'Something went wrong. Please try again.')); e.status = r.status; e.j = j; throw e; }
           return j;
         });
@@ -72,6 +71,11 @@
       api('POST', '/api/email/resend').then(function (r) { toast(r.message || 'Email sent'); }).catch(function (x) { toast(x.message); b.disabled = false; });
     });
   }
+  function usageLine() {
+    var u = state.usage, L = state.limits;
+    if (!u || !L || !L.maxMedicines) return '';
+    return u.medicines + '/' + L.maxMedicines + ' dawai · ' + u.bills_this_month + '/' + L.maxBillsPerMonth + ' bill (is mahine)';
+  }
   function renderStatus() {
     var el = $('status'); var s = state.user && state.user.status; if (!s) return;
     el.hidden = false;
@@ -79,28 +83,40 @@
     var left = end ? end.getTime() - Date.now() : 0;
     if (s.state === 'trial' && left > 0) {
       el.className = 'status trial';
-      el.innerHTML = '<span>⏳ Free trial: <strong>' + remaining(left) + '</strong> left</span><button class="btn btn-primary btn-sm" type="button" data-go="plan">Choose a plan</button>';
+      el.innerHTML = '<span>⏳ Free trial: <strong>' + remaining(left) + '</strong> left · sab features khule</span><button class="btn btn-primary btn-sm" type="button" data-go="plan">Plans</button>';
     } else if (s.state === 'active' && left > 0) {
       var days = Math.ceil(left / 86400000);
       el.className = 'status active';
-      el.innerHTML = '<span>✅ ' + esc(s.plan_name) + ' plan active · ' + (days <= 5 ? '<strong>' + days + (days === 1 ? ' day' : ' days') + ' left</strong>' : 'till ' + fmtDate(s.paid_until)) + '</span>' + (days <= 5 ? '<button class="btn btn-primary btn-sm" type="button" data-go="plan">Renew</button>' : '');
+      el.innerHTML = '<span>✅ ' + esc(s.plan_name) + ' active · ' + (days <= 5 ? '<strong>' + days + (days === 1 ? ' day' : ' days') + ' left</strong>' : 'till ' + fmtDate(s.paid_until)) + '</span>' + (days <= 5 ? '<button class="btn btn-primary btn-sm" type="button" data-go="plan">Renew</button>' : '');
     } else {
-      el.className = 'status expired';
-      el.innerHTML = '<span>' + (s.plan === 'trial' || !s.paid_until ? 'Your free trial has ended.' : 'Your plan has ended.') + ' Your data is safe. Choose a plan to continue.</span><button class="btn btn-primary btn-sm" type="button" data-go="plan">Choose a plan</button>';
-      if (s.state !== 'expired') { s.state = 'expired'; lockApp(); }
+      if (s.state !== 'free') { refreshMe(); return; }
+      el.className = 'status free';
+      el.innerHTML = '<span>Free plan' + (usageLine() ? ' · ' + usageLine() : '') + '</span><button class="btn btn-primary btn-sm" type="button" data-go="plan">Pro ₹149</button>';
     }
   }
-  function lockApp() {
-    document.querySelectorAll('.tabs button').forEach(function (b) { if (b.dataset.tab !== 'plan') b.disabled = true; });
-    if (state.tab !== 'plan') showTab('plan');
+  var refreshing = false;
+  function refreshMe() {
+    if (refreshing) return Promise.resolve();
+    refreshing = true;
+    return api('GET', '/api/me').then(function (r) { state.user = r.user; state.limits = r.limits; state.usage = r.usage; applyLimits(); renderStatus(); }).catch(function () {}).finally(function () { refreshing = false; });
   }
+  function applyLimits() {
+    [$('csv-stock'), $('csv-rem')].forEach(function (a) {
+      if (!state.limits.csvExport) { a.setAttribute('aria-disabled', 'true'); a.dataset.reason = 'CSV download Pro plan mein hai (₹149/month).'; }
+      else a.removeAttribute('aria-disabled');
+    });
+  }
+  function lockApp() {}
 
   // ---------- tabs ----------
   function showTab(name) {
     state.tab = name;
-    var navName = (name === 'newbill' || name === 'billview') ? 'bills' : name;
+    var NAV = { newbill: 'bills', billview: 'bills', purchases: 'stock', purchaseform: 'stock', customer: 'udhaar', refills: 'more', plan: 'more' };
+    var navName = NAV[name] || name;
     document.querySelectorAll('.tabs button').forEach(function (b) { b.setAttribute('aria-selected', b.dataset.tab === navName ? 'true' : 'false'); });
-    ['home', 'bills', 'newbill', 'billview', 'stock', 'refills', 'plan'].forEach(function (t) { $('tab-' + t).hidden = t !== name; });
+    ['home', 'bills', 'newbill', 'billview', 'stock', 'purchases', 'purchaseform', 'udhaar', 'customer', 'more', 'refills', 'plan'].forEach(function (t) { $('tab-' + t).hidden = t !== name; });
+    if (name === 'purchases') loadPurchases();
+    if (name === 'udhaar') loadKhata();
     if (name === 'home') loadHome();
     if (name === 'stock') loadMeds();
     if (name === 'bills') loadBills();
@@ -120,6 +136,7 @@
     return html + '<div class="list">' + list.map(function (m) { return medRow(m, extraFn && extraFn(m)); }).join('') + '</div></div>';
   }
   function loadHome() {
+    if (state.user && state.user.status.state === 'free') refreshMe();
     return api('GET', '/api/alerts').then(function (a) {
       state.alertsMeds = [].concat(a.expired, a.within30, a.within60, a.within90, a.lowStock);
       var t = a.totals;
@@ -325,13 +342,14 @@
     var err = $('b-err'), btn = $('b-save'), t = totals();
     if (!bill.lines.length) { err.textContent = 'Add at least one medicine.'; err.hidden = false; return; }
     var data = {
-      customer_name: $('b-cname').value, customer_phone: $('b-cphone').value,
+      customer_name: $('b-cname').value, customer_phone: $('b-cphone').value, udhaar: $('b-udhaar').checked,
       items: bill.lines.map(function (l) { return { medicine_id: l.med.id, qty: l.qty, price: l.price }; }),
       discount_type: t.dt, discount_value: t.dv, gst_mode: t.mode, gst_percent: t.pct,
     };
     btn.disabled = true; err.hidden = true; btn.textContent = 'Saving…';
     api('POST', '/api/bills', data).then(function (r) {
-      toast('Bill #' + r.bill.bill_no + ' saved. Stock updated.');
+      toast('Bill #' + r.bill.bill_no + ' saved. Stock updated.' + (data.udhaar ? ' Udhaar mein likha.' : ''));
+      if (state.usage) state.usage.bills_this_month++;
       openBill(r.bill);
     }).catch(function (x) {
       err.textContent = x.message; err.hidden = false;
@@ -387,7 +405,19 @@
     $('invoice').innerHTML = invoiceHTML(b);
     var phone = (b.customer_phone || '').replace(/\D/g, '');
     $('bv-wa').href = 'https://wa.me/' + (phone ? '91' + phone : '') + '?text=' + encodeURIComponent(waText(b));
+    var ub = $('bv-udhaar'); ub.disabled = true; ub.textContent = '📒 Udhaar mein likho';
+    api('GET', '/api/bills/' + b.id + '/udhaar').then(function (r) {
+      if (currentBill !== b) return;
+      if (r.udhaar) { ub.textContent = '📒 Udhaar: ' + r.udhaar.name + ' ✓'; ub.dataset.cust = r.udhaar.customer_id; }
+      else { ub.disabled = false; delete ub.dataset.cust; }
+      ub.disabled = false;
+    }).catch(function () { ub.disabled = false; });
   }
+  $('bv-udhaar').addEventListener('click', function () {
+    if (!currentBill) return;
+    if (this.dataset.cust) { openCustomer(Number(this.dataset.cust)); return; }
+    openKhata('udhaar', null, { name: currentBill.customer_name, phone: currentBill.customer_phone, amount: currentBill.total, bill: currentBill });
+  });
   function setPaper(p) { $('invoice').className = 'invoice inv-' + p; }
   $('bv-paper').addEventListener('change', function () { localStorage.setItem('dl_paper', this.value); setPaper(this.value); });
   $('bv-print').addEventListener('click', function () {
@@ -461,15 +491,19 @@
     if (!cfg.payments.enabled) note = '<div class="alert alert-warn" style="margin-bottom:14px">Online payments are being set up and will be available soon. Your trial and data are not affected.</div>';
     else if (cfg.payments.test_mode) note = '<div class="test-note">🧪 Test mode — no real money is charged</div>';
     $('pay-note').innerHTML = note;
-    var cur;
-    if (s.state === 'trial') cur = '<h3>Free trial</h3><p class="muted" style="margin:0">All features are open until <strong>' + new Date(s.trial_ends_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) + '</strong>. Choose a plan any time; paid days start after your trial ends.</p>';
-    else if (s.state === 'active') cur = '<h3>' + esc(s.plan_name) + ' plan</h3><p class="muted" style="margin:0">Active till <strong>' + fmtDate(s.paid_until) + '</strong>. Paying again adds 30 more days.</p>';
-    else cur = '<h3>No active plan</h3><p class="muted" style="margin:0">Your data is safe. Choose a plan below to unlock your store again.</p>';
+    var cur, free = cfg.free || { max_medicines: 100, max_bills_per_month: 50, features: [] };
+    var fmtEnd = function (d) { return new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); };
+    if (s.state === 'trial') cur = '<h3>Free trial (' + (cfg.trial_days || 14) + ' din)</h3><p class="muted" style="margin:0">Sab features <strong>' + fmtEnd(s.trial_ends_at) + '</strong> tak khule. Uske baad store apne aap <b>Free plan</b> pe chala jayega (' + free.max_medicines + ' dawai, ' + free.max_bills_per_month + ' bill/mahina) — data safe rahega. Pro kabhi bhi lein; paid din trial ke baad shuru honge.</p>';
+    else if (s.state === 'active') cur = '<h3>' + esc(s.plan_name) + '</h3><p class="muted" style="margin:0">Active till <strong>' + fmtDate(s.paid_until) + '</strong>. Dobara pay karne pe din aage jud jayenge.</p>';
+    else cur = '<h3>Free plan</h3><p class="muted" style="margin:0">' + (usageLine() ? 'Use: <strong>' + usageLine() + '</strong>. ' : '') + 'Limit poori hone pe purana data safe rahega; nayi dawai/bill ke liye Pro lein.</p>';
     $('plan-current').innerHTML = cur;
-    $('plan-cards').innerHTML = cfg.plans.map(function (p) {
+    var freeCard = '<div class="card' + (s.state === 'free' ? ' current' : '') + '"><h3 style="margin:0">Free' + (s.state === 'free' ? ' <span class="badge b-green">Current</span>' : '') + '</h3><div class="price">₹0<small> / hamesha</small></div><ul>' + free.features.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul></div>';
+    $('plan-cards').innerHTML = freeCard + cfg.plans.map(function (p) {
       var isCur = s.state === 'active' && s.plan === p.id;
-      return '<div class="card' + (isCur ? ' current' : '') + '"><h3 style="margin:0">' + esc(p.name) + (isCur ? ' <span class="badge b-green">Current</span>' : '') + '</h3><div class="price">₹' + p.price + '<small> / 30 days</small></div><ul>' + p.features.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>' +
-        '<button class="btn ' + (p.id === 'pro' ? 'btn-primary' : 'btn-ghost') + ' btn-block" type="button" data-pay="' + p.id + '"' + (cfg.payments.enabled ? '' : ' disabled') + '>' + (isCur ? 'Renew' : 'Pay') + ' ₹' + p.price + '</button></div>';
+      var per = p.period === 'year' ? ' / saal' : ' / mahina';
+      var save = p.period === 'year' ? '<div class="save-tag">₹' + (149 * 12 - p.price) + ' bachao (₹' + Math.round(p.price / 12) + '/mahina)</div>' : '';
+      return '<div class="card' + (isCur ? ' current' : '') + (p.period === 'year' ? ' best' : '') + '"><h3 style="margin:0">' + esc(p.name) + (isCur ? ' <span class="badge b-green">Current</span>' : '') + '</h3><div class="price">₹' + p.price.toLocaleString('en-IN') + '<small>' + per + '</small></div>' + save + '<ul>' + p.features.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>' +
+        '<button class="btn ' + (p.period === 'year' ? 'btn-primary' : 'btn-ghost') + ' btn-block" type="button" data-pay="' + p.id + '"' + (cfg.payments.enabled ? '' : ' disabled') + '>' + (isCur ? 'Renew' : 'Pay') + ' ₹' + p.price.toLocaleString('en-IN') + '</button></div>';
     }).join('');
     var f = $('profile-form'); f.store_name.value = u.store_name; f.owner_name.value = u.owner_name; f.city.value = u.city; f.store_address.value = u.store_address || ''; f.gstin.value = u.gstin || ''; f.drug_licence.value = u.drug_licence || '';
     $('p-login').textContent = 'Login: +91 ' + u.phone + (u.email ? ' · ' + u.email : '');
@@ -477,7 +511,8 @@
       if (!r.payments.length) { $('pay-history').textContent = 'No payments yet.'; return; }
       $('pay-history').innerHTML = '<div class="list">' + r.payments.map(function (p) {
         var st = p.status === 'paid' ? '<span class="badge b-green">Paid</span>' : '<span class="badge b-red">Failed</span>';
-        return '<div class="item"><div class="main"><b>' + esc(p.plan === 'clinic' ? 'Clinic+' : p.plan.charAt(0).toUpperCase() + p.plan.slice(1)) + ' · ' + rupees(p.amount_paise / 100) + (p.live_mode ? '' : ' <span class="badge b-yellow">Test</span>') + '</b><small>' + fmtDate(p.paid_at || p.created_at) + (p.razorpay_payment_id ? ' · ' + esc(p.razorpay_payment_id) : '') + '</small></div><div class="side">' + st + '</div></div>';
+        var PN = { monthly: 'Pro (monthly)', yearly: 'Pro (yearly)', clinic: 'Clinic+', basic: 'Basic', pro: 'Pro' };
+        return '<div class="item"><div class="main"><b>' + esc(PN[p.plan] || p.plan) + ' · ' + rupees(p.amount_paise / 100) + (p.live_mode ? '' : ' <span class="badge b-yellow">Test</span>') + '</b><small>' + fmtDate(p.paid_at || p.created_at) + (p.razorpay_payment_id ? ' · ' + esc(p.razorpay_payment_id) : '') + '</small></div><div class="side">' + st + '</div></div>';
       }).join('') + '</div>';
     }).catch(function () {});
   }
@@ -497,12 +532,12 @@
       var o = res[1];
       var rzp = new window.Razorpay({
         key: o.key_id, amount: o.amount, currency: o.currency, order_id: o.order_id,
-        name: 'Dawalekh', description: o.plan.name + ' plan · 30 days',
+        name: 'Dawalekh', description: o.plan.name + (o.plan.id === 'yearly' ? ' · 365 days' : ' · 30 days'),
         prefill: o.prefill, notes: { plan: o.plan.id }, theme: { color: '#0f766e' },
         handler: function (resp) {
           btn.textContent = 'Confirming…';
           api('POST', '/api/billing/verify', resp).then(function (r) {
-            state.user = r.user; renderStatus(); unlock(); toast('Payment successful! ' + o.plan.name + ' plan is active.'); loadPlan();
+            state.user = r.user; refreshMe(); unlock(); toast('Payment successful! ' + o.plan.name + ' is active.'); loadPlan();
           }).catch(function (x) { alert(x.message); }).finally(reset);
         },
         modal: { ondismiss: reset },
@@ -529,6 +564,13 @@
     else if (t.dataset.go) showTab(t.dataset.go);
     else if (t.hasAttribute('data-add-med')) openMed(null);
     else if (t.hasAttribute('data-new-bill')) showTab('newbill');
+    else if (t.hasAttribute('data-new-purchase')) openPurchase(null);
+    else if (t.dataset.purchase) api('GET', '/api/purchases/' + t.dataset.purchase).then(function (r) { openPurchase(r.purchase); }).catch(showError);
+    else if (t.dataset.supplier !== undefined && t.classList.contains('sup-row')) { purState.supplier = t.dataset.supplier; loadPurchases(); }
+    else if (t.hasAttribute('data-clear-sup')) { purState.supplier = ''; loadPurchases(); }
+    else if (t.dataset.khata) openKhata(t.dataset.khata, t.hasAttribute('data-for-current') ? curCustomer : null);
+    else if (t.dataset.customer) openCustomer(Number(t.dataset.customer));
+    else if (t.dataset.delEntry) delEntry(Number(t.dataset.delEntry));
     else if (t.dataset.pick) addLine(t.dataset.pick);
     else if (t.dataset.bill) api('GET', '/api/bills/' + t.dataset.bill).then(function (r) { openBill(r.bill); }).catch(showError);
     else if (t.dataset.editMed) openMed(findMed(t.dataset.editMed));
@@ -555,19 +597,218 @@
   });
   $('logout').addEventListener('click', function () { api('POST', '/api/logout').finally(function () { location.href = '/'; }); });
 
+  // ---------- purchase entry ----------
+  var purState = { supplier: '', current: null, suppliers: [] };
+  function loadPurchases() {
+    var q = purState.supplier ? '?supplier=' + encodeURIComponent(purState.supplier) : '';
+    return api('GET', '/api/purchases' + q).then(function (r) {
+      purState.suppliers = r.suppliers;
+      $('pur-card').innerHTML = '<div><small>Is mahine ki khareed</small><strong>' + rupees(r.this_month.total) + '</strong></div><div><small>Purchase bills</small><strong>' + r.this_month.count + '</strong></div>';
+      $('pur-filter').innerHTML = purState.supplier ? '<p class="small"><span class="badge b-green">Supplier: ' + esc(purState.supplier) + '</span> <button class="linkbtn" type="button" data-clear-sup>✕ sab dikhao</button></p>' : '';
+      $('pur-list').innerHTML = r.purchases.length ? r.purchases.map(function (p) {
+        return '<button type="button" class="item bill-item li-row" data-purchase="' + p.id + '"><div class="main"><b>' + esc(p.supplier) + (p.invoice_no ? ' · #' + esc(p.invoice_no) : '') + '</b><small>' + fmtDate(p.purchase_date) + ' · ' + p.item_count + (p.item_count === 1 ? ' item' : ' items') + '</small></div><div class="side"><strong>' + rupees(p.total) + '</strong></div></button>';
+      }).join('') : '<div class="empty"><p><strong>Abhi koi purchase nahi.</strong></p><p>Distributor ka bill aaye to yahan likhein — stock apne aap badh jayega.</p><button class="btn btn-primary" type="button" data-new-purchase>+ Pehli purchase entry</button></div>';
+      $('sup-wrap').hidden = !r.suppliers.length;
+      $('sup-list').innerHTML = r.suppliers.map(function (x) {
+        return '<button type="button" class="item bill-item li-row sup-row" data-supplier="' + esc(x.supplier) + '"><div class="main"><b>' + esc(x.supplier) + '</b><small>' + x.count + (x.count === 1 ? ' bill' : ' bills') + ' · last ' + fmtDate(x.last_date) + '</small></div><div class="side"><strong>' + rupees(x.total) + '</strong></div></button>';
+      }).join('');
+    }).catch(showError);
+  }
+  function lineHTML(i, x) {
+    x = x || {};
+    var v = function (k) { return x[k] == null ? '' : esc(x[k]); };
+    return '<div class="section-card pf-line" data-line>' +
+      '<div class="pf-line-head"><b>Item ' + (i + 1) + '</b><button class="linkbtn danger" type="button" data-rm-line aria-label="Remove line">✕ Hatao</button></div>' +
+      '<div class="field"><label>Medicine name</label><input data-k="name" list="med-names" maxlength="100" value="' + v('name') + '" placeholder="e.g. Dolo 650"></div>' +
+      '<div class="row2"><div class="field"><label>Batch</label><input data-k="batch" maxlength="40" value="' + v('batch') + '"></div><div class="field"><label>Expiry</label><input data-k="expiry" type="date" value="' + v('expiry') + '"></div></div>' +
+      '<div class="row3"><div class="field"><label>Qty</label><input data-k="qty" type="number" inputmode="numeric" min="1" step="1" value="' + v('qty') + '"></div><div class="field"><label>Rate ₹</label><input data-k="rate" type="number" inputmode="decimal" min="0" step="0.01" value="' + v('rate') + '" placeholder="kharid"></div><div class="field"><label>MRP ₹</label><input data-k="mrp" type="number" inputmode="decimal" min="0" step="0.01" value="' + v('mrp') + '"></div></div>' +
+      '<div class="small muted pf-amt" data-amt></div></div>';
+  }
+  function readLines() {
+    return Array.prototype.map.call(document.querySelectorAll('#pf-lines [data-line]'), function (el) {
+      var g = function (k) { return el.querySelector('[data-k="' + k + '"]').value; };
+      return { name: g('name').trim(), batch: g('batch').trim(), expiry: g('expiry'), qty: g('qty') === '' ? NaN : Number(g('qty')), rate: g('rate') === '' ? 0 : Number(g('rate')), mrp: g('mrp') === '' ? 0 : Number(g('mrp')) };
+    });
+  }
+  function renderLineNums() {
+    document.querySelectorAll('#pf-lines [data-line]').forEach(function (el, i) { el.querySelector('.pf-line-head b').textContent = 'Item ' + (i + 1); });
+  }
+  function pfTotals() {
+    var tot = 0;
+    document.querySelectorAll('#pf-lines [data-line]').forEach(function (el) {
+      var q = Number(el.querySelector('[data-k="qty"]').value) || 0, r = Number(el.querySelector('[data-k="rate"]').value) || 0;
+      var amt = Math.round(q * r * 100) / 100; tot += amt;
+      el.querySelector('[data-amt]').textContent = q && r ? q + ' × ' + rupees(r) + ' = ' + rupees(amt) : '';
+    });
+    $('pf-total').textContent = rupees(Math.round(tot * 100) / 100);
+  }
+  function addPurchaseLine(x) {
+    var n = document.querySelectorAll('#pf-lines [data-line]').length;
+    $('pf-lines').insertAdjacentHTML('beforeend', lineHTML(n, x));
+    pfTotals();
+  }
+  function openPurchase(p) {
+    purState.current = p;
+    showTab('purchaseform');
+    $('pf-title').textContent = p ? 'Edit purchase' : 'New purchase';
+    $('pf-err').hidden = true; $('pf-del').hidden = !p;
+    $('pf-sup').value = p ? p.supplier : (purState.supplier || '');
+    $('pf-inv').value = p ? p.invoice_no : '';
+    $('pf-date').value = p ? p.purchase_date : todayISO(0);
+    $('pf-lines').innerHTML = '';
+    (p ? p.items : [{}]).forEach(function (x) { addPurchaseLine(x); });
+    $('sup-names').innerHTML = purState.suppliers.map(function (x) { return '<option value="' + esc(x.supplier) + '">'; }).join('');
+    var fill = function () { var seen = {}; $('med-names').innerHTML = state.meds.filter(function (m) { var k = m.name.toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true; }).map(function (m) { return '<option value="' + esc(m.name) + '">'; }).join(''); };
+    if (state.meds.length) fill(); else api('GET', '/api/medicines').then(function (r) { state.meds = r.medicines; fill(); }).catch(function () {});
+    if (!purState.suppliers.length) api('GET', '/api/purchases').then(function (r) { purState.suppliers = r.suppliers; $('sup-names').innerHTML = r.suppliers.map(function (x) { return '<option value="' + esc(x.supplier) + '">'; }).join(''); }).catch(function () {});
+  }
+  $('pf-add').addEventListener('click', function () { addPurchaseLine({}); var l = document.querySelectorAll('#pf-lines [data-line]'); l[l.length - 1].querySelector('input').focus(); });
+  $('pf-lines').addEventListener('input', function (e) {
+    var inp = e.target;
+    if (inp.dataset.k === 'name') {
+      var line = inp.closest('[data-line]'), name = inp.value.trim().toLowerCase();
+      var m = state.meds.filter(function (x) { return x.name.toLowerCase() === name; })[0];
+      if (m) {
+        var mrp = line.querySelector('[data-k="mrp"]'), batch = line.querySelector('[data-k="batch"]');
+        if (!mrp.value && m.price) mrp.value = m.price;
+        if (!batch.value && m.batch) batch.placeholder = 'pichhla: ' + m.batch;
+      }
+    }
+    pfTotals();
+  });
+  $('pf-lines').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-rm-line]'); if (!b) return;
+    if (document.querySelectorAll('#pf-lines [data-line]').length === 1) { toast('Kam se kam ek line chahiye.'); return; }
+    b.closest('[data-line]').remove(); renderLineNums(); pfTotals();
+  });
+  $('pur-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var err = $('pf-err'), btn = $('pf-save'), p = purState.current;
+    var data = { supplier: $('pf-sup').value, invoice_no: $('pf-inv').value, purchase_date: $('pf-date').value, items: readLines() };
+    btn.disabled = true; err.hidden = true; btn.textContent = 'Saving…';
+    api(p ? 'PUT' : 'POST', '/api/purchases' + (p ? '/' + p.id : ''), data).then(function (r) {
+      state.meds = [];
+      var sh = (r.short || []).map(function (x) { return x.name + ' (' + x.sold + ' bik chuki)'; }).join(', ');
+      toast((p ? 'Purchase update ho gayi.' : 'Purchase saved. ' + r.purchase.items.length + ' dawai stock mein judi.') + (sh ? ' Note: ' + sh : ''));
+      purState.current = null; showTab('purchases');
+    }).catch(function (x) { err.textContent = x.message; err.hidden = false; err.scrollIntoView({ block: 'center' }); })
+      .finally(function () { btn.disabled = false; btn.textContent = 'Save purchase / स्टॉक में जोड़ें'; });
+  });
+  $('pf-del').addEventListener('click', function () {
+    var p = purState.current;
+    if (!p || !confirm('Delete this purchase from ' + p.supplier + '? Its quantity will be taken out of stock.\n\nYe purchase delete karein? Iski quantity stock se ghat jayegi.')) return;
+    api('DELETE', '/api/purchases/' + p.id).then(function (r) {
+      state.meds = [];
+      var sh = (r.short || []).map(function (x) { return x.name + ' (' + x.sold + ' pehle hi bik chuki)'; }).join(', ');
+      toast('Purchase deleted. Stock kam kiya.' + (sh ? ' ' + sh : '')); purState.current = null; showTab('purchases');
+    }).catch(showError);
+  });
+
+  // ---------- udhaar khata ----------
+  var khState = { customers: [], current: null };
+  var curCustomer = null;
+  function loadKhata() {
+    return api('GET', '/api/khata').then(function (r) {
+      khState.customers = r.customers;
+      $('udh-card').innerHTML = '<div><small>Kul baaki (total due)</small><strong>' + rupees(r.total_due) + '</strong></div><div><small>Kitne logon pe</small><strong>' + r.owing_count + '</strong></div>';
+      renderKhata();
+    }).catch(showError);
+  }
+  function renderKhata() {
+    var q = ($('udh-search').value || '').trim().toLowerCase();
+    var list = khState.customers.filter(function (c) { return !q || c.name.toLowerCase().indexOf(q) >= 0 || (c.phone || '').indexOf(q) >= 0; });
+    if (!khState.customers.length) { $('udh-list').innerHTML = '<div class="empty"><p><strong>Udhaar khata khaali hai.</strong></p><p>Kisi ne udhaar liya? Yahan likhein; payment aane pe "Payment mila" dabayein. Baaki apne aap jud jayega.</p><button class="btn btn-primary" type="button" data-khata="udhaar">+ Pehla udhaar likho</button></div>'; return; }
+    $('udh-list').innerHTML = list.map(function (c) {
+      var due = c.balance > 0.004, adv = c.balance < -0.004;
+      return '<button type="button" class="item bill-item li-row" data-customer="' + c.id + '"><div class="main"><b>' + esc(c.name) + '</b><small>' + (c.phone ? esc(c.phone) + ' · ' : '') + (c.last_date ? 'last ' + fmtDate(c.last_date) : '') + '</small></div><div class="side">' +
+        (due ? '<strong class="due">' + rupees(c.balance) + '</strong>' : adv ? '<span class="badge b-green">Advance ' + rupees(-c.balance) + '</span>' : '<span class="badge b-green">Clear ✓</span>') + '</div></button>';
+    }).join('') || '<div class="empty">Koi customer nahi mila.</div>';
+  }
+  $('udh-search').addEventListener('input', renderKhata);
+  function waReminder(c) {
+    var store = (state.user && state.user.store_name) || '';
+    return 'Namaste ' + c.name + ' ji, aapka ' + rupees(c.balance) + ' baaki hai — ' + store + '. Dhanyavaad 🙏';
+  }
+  function openCustomer(id) {
+    return api('GET', '/api/khata/customers/' + id).then(function (r) {
+      var c = r.customer; curCustomer = c;
+      showTab('customer');
+      $('cu-name').textContent = c.name;
+      var due = c.balance > 0.004;
+      $('cu-card').innerHTML = '<div><small>' + (due ? 'Baaki (due)' : c.balance < -0.004 ? 'Advance' : 'Hisaab') + '</small><strong class="' + (due ? 'due' : 'ok') + '">' + (due || c.balance < -0.004 ? rupees(Math.abs(c.balance)) : 'Clear ✓') + '</strong></div><div><small>Mobile</small><strong class="sm">' + (c.phone ? esc(c.phone) : '—') + '</strong></div>';
+      var wa = $('cu-wa');
+      if (due) { wa.hidden = false; wa.href = 'https://wa.me/' + (c.phone ? '91' + c.phone : '') + '?text=' + encodeURIComponent(waReminder(c)); }
+      else wa.hidden = true;
+      $('cu-entries').innerHTML = r.entries.length ? r.entries.map(function (e) {
+        var u = e.kind === 'udhaar';
+        return '<div class="item k-entry li-row"><div class="main"><b class="' + (u ? 'due' : 'ok') + '">' + (u ? '+ Udhaar ' : '− Payment ') + rupees(e.amount) + '</b><small>' + fmtDate(e.entry_date) + (e.bill_no ? ' · Bill #' + e.bill_no : '') + (e.note && !(e.bill_no && e.note === 'Bill #' + e.bill_no) ? ' · ' + esc(e.note) : '') + '</small></div><div class="side"><small class="muted">Baaki ' + rupees(e.balance) + '</small><button class="linkbtn danger" type="button" data-del-entry="' + e.id + '" aria-label="Delete entry">✕</button></div></div>';
+      }).join('') : '<div class="empty">Abhi koi entry nahi.</div>';
+    }).catch(showError);
+  }
+  function delEntry(id) {
+    if (!confirm('Ye entry delete karein? / Delete this entry?')) return;
+    api('DELETE', '/api/khata/entries/' + id).then(function () { toast('Entry deleted'); if (curCustomer) openCustomer(curCustomer.id); }).catch(showError);
+  }
+  var khCtx = null;
+  function openKhata(kind, cust, pre) {
+    pre = pre || {};
+    khCtx = { kind: kind, cust: cust, bill: pre.bill || null };
+    $('kh-title').textContent = kind === 'payment' ? 'Payment mila / भुगतान' : 'Udhaar likho / उधार';
+    $('kh-err').hidden = true;
+    $('kh-cust').hidden = !!cust;
+    $('kh-for').hidden = !cust && !pre.bill;
+    $('kh-for').innerHTML = cust ? 'Customer: <b>' + esc(cust.name) + '</b>' + (cust.balance > 0.004 ? ' · baaki ' + rupees(cust.balance) : '') : pre.bill ? 'Bill #' + pre.bill.bill_no + ' udhaar mein jayega' : '';
+    $('kh-name').value = pre.name || ''; $('kh-phone').value = pre.phone || '';
+    $('kh-amt').value = pre.amount != null ? pre.amount : (kind === 'payment' && cust && cust.balance > 0 ? cust.balance : '');
+    $('kh-date').value = todayISO(0); $('kh-note').value = '';
+    $('cust-names').innerHTML = khState.customers.map(function (c) { return '<option value="' + esc(c.name) + '">' + (c.phone ? esc(c.phone) : '') + '</option>'; }).join('');
+    $('kh-dlg').showModal();
+    setTimeout(function () { (cust ? $('kh-amt') : $('kh-name')).focus(); }, 50);
+  }
+  $('kh-name').addEventListener('change', function () {
+    var n = this.value.trim().toLowerCase();
+    var c = khState.customers.filter(function (x) { return x.name.toLowerCase() === n; })[0];
+    if (c && !$('kh-phone').value) $('kh-phone').value = c.phone || '';
+  });
+  $('kh-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var err = $('kh-err'), btn = $('kh-save');
+    var data = { kind: khCtx.kind, amount: $('kh-amt').value, entry_date: $('kh-date').value, note: $('kh-note').value };
+    if (khCtx.cust) data.customer_id = khCtx.cust.id; else { data.customer_name = $('kh-name').value; data.customer_phone = $('kh-phone').value; }
+    if (khCtx.bill) data.bill_id = khCtx.bill.id;
+    btn.disabled = true; err.hidden = true;
+    api('POST', '/api/khata/entries', data).then(function (r) {
+      $('kh-dlg').close();
+      toast(khCtx.kind === 'payment' ? 'Payment likh liya ✓' : 'Udhaar likh liya ✓');
+      openCustomer(r.customer_id);
+    }).catch(function (x) { err.textContent = x.message; err.hidden = false; }).finally(function () { btn.disabled = false; });
+  });
+  $('cu-edit').addEventListener('click', function () {
+    if (!curCustomer) return;
+    $('cu-n').value = curCustomer.name; $('cu-p').value = curCustomer.phone || ''; $('cu-err').hidden = true; $('cu-dlg').showModal();
+  });
+  $('cu-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    api('PUT', '/api/khata/customers/' + curCustomer.id, { name: $('cu-n').value, phone: $('cu-p').value }).then(function () { $('cu-dlg').close(); toast('Saved'); openCustomer(curCustomer.id); })
+      .catch(function (x) { $('cu-err').textContent = x.message; $('cu-err').hidden = false; });
+  });
+  $('cu-del').addEventListener('click', function () {
+    if (!curCustomer || !confirm('Delete ' + curCustomer.name + ' and all their udhaar entries?\n\n' + curCustomer.name + ' aur unka poora hisaab delete karein?')) return;
+    api('DELETE', '/api/khata/customers/' + curCustomer.id).then(function () { toast('Customer deleted'); curCustomer = null; showTab('udhaar'); }).catch(showError);
+  });
+
   function showError(x) { if (x && x.message !== 'login' && x.status !== 402) toast(x.message); }
 
   // ---------- start ----------
   waitForServer().then(function () { return Promise.all([api('GET', '/api/me'), fetch('/api/config').then(function (r) { return r.json(); })]).then(function (res) {
-    state.user = res[0].user; state.limits = res[0].limits; state.config = res[1]; renderEmailNote();
+    state.user = res[0].user; state.limits = res[0].limits; state.usage = res[0].usage; state.config = res[1]; renderEmailNote();
     $('loading').hidden = true;
     $('store-name').textContent = state.user.store_name;
-    if (!state.limits.csvExport) { $('csv-stock').setAttribute('aria-disabled', 'true'); $('csv-stock').dataset.reason = 'CSV download is part of the Pro and Clinic+ plans.'; }
-    if (!(state.user.status.state === 'trial' || state.user.status.plan === 'clinic')) { $('csv-rem').setAttribute('aria-disabled', 'true'); $('csv-rem').dataset.reason = 'Reminder download is part of the Clinic+ plan.'; }
+    applyLimits();
     renderStatus();
     state.timer = setInterval(renderStatus, 30000);
-    if (state.user.status.state === 'expired') { lockApp(); return; }
-    showTab(location.hash === '#plan' ? 'plan' : 'home');
-    if (/welcome=1/.test(location.search)) { toast('Welcome! Your 2-day free trial has started.'); history.replaceState(null, '', '/app'); }
+    var start = (location.hash || '').slice(1);
+    showTab(['plan', 'udhaar', 'purchases', 'bills', 'stock', 'refills'].indexOf(start) >= 0 ? start : 'home');
+    if (/welcome=1/.test(location.search)) { toast('Welcome! Aapka ' + ((state.config && state.config.trial_days) || 14) + '-din ka free trial shuru ho gaya.'); history.replaceState(null, '', '/app'); }
   }); }).catch(function (x) { if (x.message !== 'login') { $('loading').textContent = 'Could not load your store. Please refresh the page.'; } });
 })();

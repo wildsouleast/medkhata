@@ -34,7 +34,7 @@ test('home JSON-LD is valid and honest (no ratings/reviews)', () => {
   for (const t of ['Organization', 'SoftwareApplication', 'FAQPage', 'WebSite']) assert.ok(types.includes(t), t);
   assert.doesNotMatch(raw, /aggregateRating|"review"/i);
   const app = ld.find((x) => x['@type'] === 'SoftwareApplication');
-  assert.deepEqual(app.offers.map((o) => o.price), ['299', '599', '999']);
+  assert.deepEqual(app.offers.map((o) => o.price), ['0', '149', '1499']);
 });
 
 test('sitemap lists every indexable page and robots points to it', () => {

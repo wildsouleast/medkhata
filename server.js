@@ -5,7 +5,7 @@ const { makePool, migrate } = require('./db');
 const A = require('./lib/auth');
 const RZ = require('./lib/razorpay');
 const MAIL = require('./lib/mailer');
-const { PLANS, TRIAL_HOURS, PERIOD_DAYS, limitsFor } = require('./lib/plans');
+const { PLANS, FREE, TRIAL_DAYS, TRIAL_HOURS, planName, planDays, limitsFor } = require('./lib/plans');
 
 const app = express();
 const pool = makePool();
@@ -89,17 +89,31 @@ function accountStatus(u) {
   const trialEnds = new Date(u.trial_ends_at).getTime();
   const paidUntil = u.paid_until ? new Date(u.paid_until).getTime() : 0;
   if (paidUntil > now) {
-    return { state: 'active', plan: u.plan, plan_name: (PLANS[u.plan] || {}).name || u.plan, paid_until: u.paid_until, ms_left: paidUntil - now };
+    return { state: 'active', plan: u.plan, plan_name: planName(u.plan), paid_until: u.paid_until, ms_left: paidUntil - now };
   }
   if (trialEnds > now && !u.paid_until) {
     return { state: 'trial', plan: 'trial', plan_name: 'Free trial', trial_ends_at: u.trial_ends_at, ms_left: trialEnds - now };
   }
-  return { state: 'expired', plan: u.plan, plan_name: u.paid_until ? ((PLANS[u.plan] || {}).name || u.plan) : 'Free trial', ended_at: u.paid_until || u.trial_ends_at, ms_left: 0 };
+  // Trial or paid period over: the store drops to the Free plan (limits apply, nothing is locked or deleted).
+  return { state: 'free', plan: 'free', plan_name: 'Free', ended_at: u.paid_until || u.trial_ends_at, ended: u.paid_until ? 'paid' : 'trial', ms_left: 0 };
 }
 
 function effectiveLimits(u) {
-  const s = accountStatus(u);
-  return s.state === 'trial' ? limitsFor('trial') : limitsFor(u.plan);
+  return limitsFor(accountStatus(u).state);
+}
+
+// Bills made this calendar month (India time); the Free plan allows FREE.maxBillsPerMonth.
+async function billsThisMonth(db, userId) {
+  const r = await db.query(
+    `SELECT count(*)::int AS n FROM bills WHERE user_id=$1
+      AND created_at >= (date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`, [userId]);
+  return r.rows[0].n;
+}
+
+async function usageFor(u) {
+  const m = await pool.query('SELECT count(*)::int AS n FROM medicines WHERE user_id=$1', [u.id]);
+  const r = await pool.query('SELECT count(*)::int AS n FROM reminders WHERE user_id=$1', [u.id]);
+  return { medicines: m.rows[0].n, bills_this_month: await billsThisMonth(pool, u.id), reminders: r.rows[0].n };
 }
 
 function publicUser(u) {
@@ -152,8 +166,10 @@ app.get('/api/config', (req, res) => {
   const c = RZ.config();
   res.json({
     payments: { enabled: c.enabled, test_mode: c.enabled && !c.liveMode, key_id: c.enabled ? c.keyId : null },
-    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, features: p.features })),
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, price: p.price, period: p.period, days: p.days, features: p.features })),
+    free: { name: FREE.name, max_medicines: FREE.maxMedicines, max_bills_per_month: FREE.maxBillsPerMonth, max_reminders: FREE.maxReminders, features: FREE.features },
     trial_hours: TRIAL_HOURS,
+    trial_days: TRIAL_DAYS,
     email_enabled: MAIL.enabled(),
     business: {
       name: process.env.BRAND_NAME || 'Dawalekh',
@@ -247,9 +263,9 @@ app.get('/api/session', wrap(async (req, res) => {
   res.json({ logged_in: Boolean(u) });
 }));
 
-app.get('/api/me', requireUser, (req, res) => {
-  res.json({ user: publicUser(req.user), limits: effectiveLimits(req.user) });
-});
+app.get('/api/me', requireUser, wrap(async (req, res) => {
+  res.json({ user: publicUser(req.user), limits: effectiveLimits(req.user), usage: await usageFor(req.user) });
+}));
 
 app.put('/api/me', requireUser, wrap(async (req, res) => {
   const b = req.body || {};
@@ -311,7 +327,7 @@ app.post('/api/medicines', requireUser, requireAccess, wrap(async (req, res) => 
   const lim = effectiveLimits(req.user);
   if (lim.maxMedicines) {
     const c = await pool.query('SELECT count(*)::int AS n FROM medicines WHERE user_id=$1', [req.user.id]);
-    if (c.rows[0].n >= lim.maxMedicines) return res.status(403).json({ error: 'limit', message: `Your ${lim.name} plan allows up to ${lim.maxMedicines} medicines. Upgrade to Pro for unlimited.` });
+    if (c.rows[0].n >= lim.maxMedicines) return res.status(403).json({ error: 'limit', message: `Free plan mein ${lim.maxMedicines} dawai tak. Unlimited ke liye Pro lein (₹149/month). / The Free plan allows up to ${lim.maxMedicines} medicines.` });
   }
   const r = await pool.query(
     `INSERT INTO medicines(user_id, name, batch, expiry, qty, price, min_qty, supplier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${MED_COLS}`,
@@ -344,7 +360,7 @@ function csvCell(v) {
 }
 
 app.get('/api/medicines.csv', requireUser, requireAccess, wrap(async (req, res) => {
-  if (!effectiveLimits(req.user).csvExport) return res.status(403).json({ error: 'limit', message: 'CSV download is part of the Pro and Clinic+ plans.' });
+  if (!effectiveLimits(req.user).csvExport) return res.status(403).json({ error: 'limit', message: 'CSV download Pro plan mein hai. / CSV download is part of the Pro plan.' });
   const r = await pool.query(`SELECT ${MED_COLS} FROM medicines WHERE user_id=$1 ORDER BY expiry ASC, name ASC`, [req.user.id]);
   const lines = [['Medicine', 'Batch', 'Expiry', 'Days left', 'Quantity', 'Price (Rs)', 'Low-stock level', 'Supplier'].join(',')];
   r.rows.forEach((m) => lines.push([m.name, m.batch, m.expiry, m.days_left, m.qty, m.price, m.min_qty, m.supplier].map(csvCell).join(',')));
@@ -438,12 +454,19 @@ app.post('/api/bills', requireUser, requireAccess, wrap(async (req, res) => {
   const gstMode = ['incl', 'excl'].includes(body.gst_mode) ? body.gst_mode : 'none';
   const gstPct = gstMode === 'none' ? 0 : Number(body.gst_percent);
   if (!Number.isFinite(gstPct) || gstPct < 0 || gstPct > 28) return bad(res, 'GST % should be between 0 and 28.');
+  const asUdhaar = body.udhaar === true;
+  if (asUdhaar && customerName.length < 2) return bad(res, 'Udhaar ke liye customer ka naam likhein. / Enter the customer name for udhaar.', 'customer_name');
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     // Lock the store row so bill numbers stay in order, then the medicines being sold.
     await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
+    const blim = effectiveLimits(req.user);
+    if (blim.maxBillsPerMonth && (await billsThisMonth(client, req.user.id)) >= blim.maxBillsPerMonth) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'limit', message: `Free plan mein mahine ke ${blim.maxBillsPerMonth} bill tak. Aur bill ke liye Pro lein (₹149/month). / The Free plan allows ${blim.maxBillsPerMonth} bills a month.` });
+    }
     const ids = [...new Set(lines.map((l) => l.id))];
     const mq = await client.query(`SELECT ${MED_COLS} FROM medicines WHERE user_id=$1 AND id = ANY($2::int[]) FOR UPDATE`, [req.user.id, ids]);
     const meds = new Map(mq.rows.map((m) => [m.id, m]));
@@ -480,6 +503,11 @@ app.post('/api/bills', requireUser, requireAccess, wrap(async (req, res) => {
         [billId, m.id, m.name, m.batch, m.expiry, l.qty, l.price, round2(l.qty * l.price)]);
     }
     for (const [id, q] of want) await client.query('UPDATE medicines SET qty=qty-$1, updated_at=now() WHERE id=$2 AND user_id=$3', [q, id, req.user.id]);
+    if (asUdhaar && total > 0) {
+      const cust = await findOrCreateCustomer(client, req.user.id, customerName, customerPhone);
+      await client.query("INSERT INTO khata_entries(user_id, customer_id, kind, amount, note, bill_id, entry_date) VALUES ($1,$2,'udhaar',$3,$4,$5,$6)",
+        [req.user.id, cust.id, total, `Bill #${no.rows[0].n}`, billId, istDate(0)]);
+    }
     await client.query('COMMIT');
     const b = await pool.query(`SELECT ${BILL_COLS} FROM bills b WHERE b.id=$1`, [billId]);
     const items = await pool.query("SELECT id, medicine_id, name, batch, to_char(expiry,'YYYY-MM-DD') AS expiry, qty, price::float AS price, amount::float AS amount FROM bill_items WHERE bill_id=$1 ORDER BY id", [billId]);
@@ -539,7 +567,7 @@ app.post('/api/reminders', requireUser, requireAccess, wrap(async (req, res) => 
   const lim = effectiveLimits(req.user);
   if (lim.maxReminders) {
     const c = await pool.query('SELECT count(*)::int AS n FROM reminders WHERE user_id=$1', [req.user.id]);
-    if (c.rows[0].n >= lim.maxReminders) return res.status(403).json({ error: 'limit', message: `Your ${lim.name} plan allows up to ${lim.maxReminders} refill reminders. Upgrade for more.` });
+    if (c.rows[0].n >= lim.maxReminders) return res.status(403).json({ error: 'limit', message: `Free plan mein ${lim.maxReminders} refill reminders tak. Unlimited ke liye Pro lein. / The Free plan allows up to ${lim.maxReminders} refill reminders.` });
   }
   const q = await pool.query(
     `INSERT INTO reminders(user_id, patient_name, phone, medicine, every_days, next_due) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${REM_COLS}`,
@@ -576,13 +604,291 @@ app.delete('/api/reminders/:id', requireUser, requireAccess, wrap(async (req, re
 }));
 
 app.get('/api/reminders.csv', requireUser, requireAccess, wrap(async (req, res) => {
-  if (req.user.plan !== 'clinic' && accountStatus(req.user).state !== 'trial') return res.status(403).json({ error: 'limit', message: 'Reminder download is part of the Clinic+ plan.' });
+  if (!effectiveLimits(req.user).csvExport) return res.status(403).json({ error: 'limit', message: 'CSV download Pro plan mein hai. / CSV download is part of the Pro plan.' });
   const q = await pool.query(`SELECT ${REM_COLS} FROM reminders WHERE user_id=$1 ORDER BY next_due ASC`, [req.user.id]);
   const lines = [['Patient', 'Mobile', 'Medicine', 'Every (days)', 'Next refill'].join(',')];
   q.rows.forEach((r) => lines.push([r.patient_name, r.phone, r.medicine, r.every_days, r.next_due].map(csvCell).join(',')));
   res.set('Content-Type', 'text/csv; charset=utf-8');
   res.set('Content-Disposition', 'attachment; filename="dawalekh-reminders.csv"');
   res.send('\ufeff' + lines.join('\n'));
+}));
+
+// ---------- purchase entry (stock in from a supplier bill) ----------
+const PUR_COLS = "p.id, p.supplier, p.invoice_no, to_char(p.purchase_date,'YYYY-MM-DD') AS purchase_date, p.total::float AS total, p.note, p.created_at";
+const PUR_ITEM_COLS = "id, medicine_id, name, batch, to_char(expiry,'YYYY-MM-DD') AS expiry, qty, rate::float AS rate, mrp::float AS mrp, amount::float AS amount";
+
+function readPurchase(b) {
+  const p = { supplier: str(b.supplier, 80), invoice_no: str(b.invoice_no, 40), purchase_date: str(b.purchase_date, 10), note: str(b.note, 200) };
+  if (p.supplier.length < 2) return { error: 'Supplier / distributor ka naam likhein. / Enter the supplier name.' };
+  if (!isDate(p.purchase_date)) return { error: 'Purchase date sahi chunein. / Choose a valid purchase date.' };
+  const raw = Array.isArray(b.items) ? b.items : [];
+  if (!raw.length) return { error: 'Kam se kam ek dawai jodein. / Add at least one medicine.' };
+  if (raw.length > 200) return { error: 'One purchase can have up to 200 lines.' };
+  p.items = [];
+  for (const it of raw) {
+    const x = { name: str(it && it.name, 100), batch: str(it && it.batch, 40), expiry: str(it && it.expiry, 10), qty: Number(it && it.qty), rate: Number(it && it.rate), mrp: Number(it && it.mrp) };
+    const tag = x.name || 'a line';
+    if (x.name.length < 2) return { error: 'Har line mein dawai ka naam likhein. / Enter the medicine name on every line.' };
+    if (!isDate(x.expiry)) return { error: `${tag}: expiry date sahi chunein. / Choose a valid expiry date.` };
+    if (!Number.isInteger(x.qty) || x.qty < 1 || x.qty > 1000000) return { error: `${tag}: quantity 1 ya zyada (whole number). / Quantity must be 1 or more.` };
+    if (!Number.isFinite(x.rate) || x.rate < 0 || x.rate > 1000000) return { error: `${tag}: purchase rate sahi likhein. / Enter a valid purchase rate.` };
+    if (!Number.isFinite(x.mrp) || x.mrp < 0 || x.mrp > 1000000) return { error: `${tag}: MRP sahi likhein. / Enter a valid MRP.` };
+    x.rate = round2(x.rate); x.mrp = round2(x.mrp); x.amount = round2(x.qty * x.rate);
+    p.items.push(x);
+  }
+  p.total = round2(p.items.reduce((s, x) => s + x.amount, 0));
+  return { p };
+}
+
+// Adds each line to stock: same name + batch -> quantity goes up (expiry, MRP, rate, supplier updated); otherwise a new medicine.
+async function applyPurchaseItems(client, user, purchaseId, p) {
+  const lim = effectiveLimits(user);
+  for (const x of p.items) {
+    const ex = await client.query('SELECT id FROM medicines WHERE user_id=$1 AND lower(name)=lower($2) AND lower(batch)=lower($3) ORDER BY id LIMIT 1 FOR UPDATE', [user.id, x.name, x.batch]);
+    let medId;
+    if (ex.rowCount) {
+      medId = ex.rows[0].id;
+      await client.query('UPDATE medicines SET qty=qty+$1, expiry=$2, price=$3, purchase_rate=$4, supplier=$5, updated_at=now() WHERE id=$6',
+        [x.qty, x.expiry, x.mrp, x.rate, p.supplier, medId]);
+    } else {
+      if (lim.maxMedicines) {
+        const c = await client.query('SELECT count(*)::int AS n FROM medicines WHERE user_id=$1', [user.id]);
+        if (c.rows[0].n >= lim.maxMedicines) {
+          const err = new Error('limit'); err.limitMessage = `Free plan mein ${lim.maxMedicines} dawai tak. "${x.name}" nayi dawai hai, isliye nahi jud saki. Pro lein (₹149/month). / The Free plan allows up to ${lim.maxMedicines} medicines.`; throw err;
+        }
+      }
+      const ins = await client.query('INSERT INTO medicines(user_id, name, batch, expiry, qty, price, purchase_rate, supplier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
+        [user.id, x.name, x.batch, x.expiry, x.qty, x.mrp, x.rate, p.supplier]);
+      medId = ins.rows[0].id;
+    }
+    await client.query('INSERT INTO purchase_items(purchase_id, medicine_id, name, batch, expiry, qty, rate, mrp, amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [purchaseId, medId, x.name, x.batch, x.expiry, x.qty, x.rate, x.mrp, x.amount]);
+  }
+}
+
+// Takes a purchase's quantities back out of stock (never below 0, since some may already be sold). Returns lines that could not be fully reversed.
+async function reversePurchaseItems(client, userId, purchaseId) {
+  const items = await client.query('SELECT medicine_id, name, qty FROM purchase_items WHERE purchase_id=$1', [purchaseId]);
+  const short = [];
+  for (const it of items.rows) {
+    if (!it.medicine_id) continue;
+    const m = await client.query('SELECT qty FROM medicines WHERE id=$1 AND user_id=$2 FOR UPDATE', [it.medicine_id, userId]);
+    if (!m.rowCount) continue;
+    const take = Math.min(m.rows[0].qty, it.qty);
+    if (take < it.qty) short.push({ name: it.name, sold: it.qty - take });
+    await client.query('UPDATE medicines SET qty=qty-$1, updated_at=now() WHERE id=$2', [take, it.medicine_id]);
+  }
+  await client.query('DELETE FROM purchase_items WHERE purchase_id=$1', [purchaseId]);
+  return short;
+}
+
+async function purchaseWithItems(db, id) {
+  const p = await db.query(`SELECT ${PUR_COLS} FROM purchases p WHERE p.id=$1`, [id]);
+  const items = await db.query(`SELECT ${PUR_ITEM_COLS} FROM purchase_items WHERE purchase_id=$1 ORDER BY id`, [id]);
+  return { ...p.rows[0], items: items.rows };
+}
+
+async function inTx(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(client);
+    await client.query(out && out.rollback ? 'ROLLBACK' : 'COMMIT');
+    return out;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+app.get('/api/purchases', requireUser, requireAccess, wrap(async (req, res) => {
+  const supplier = str(req.query.supplier, 80);
+  const q = await pool.query(
+    `SELECT ${PUR_COLS}, (SELECT count(*)::int FROM purchase_items i WHERE i.purchase_id=p.id) AS item_count
+       FROM purchases p WHERE p.user_id=$1 AND ($2 = '' OR lower(p.supplier)=lower($2))
+       ORDER BY p.purchase_date DESC, p.id DESC LIMIT 500`, [req.user.id, supplier]);
+  const sup = await pool.query(
+    `SELECT min(supplier) AS supplier, count(*)::int AS count, COALESCE(sum(total),0)::float AS total, to_char(max(purchase_date),'YYYY-MM-DD') AS last_date
+       FROM purchases WHERE user_id=$1 GROUP BY lower(supplier) ORDER BY sum(total) DESC`, [req.user.id]);
+  const month = await pool.query(
+    `SELECT count(*)::int AS count, COALESCE(sum(total),0)::float AS total FROM purchases
+      WHERE user_id=$1 AND purchase_date >= date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date`, [req.user.id]);
+  res.json({ purchases: q.rows, suppliers: sup.rows, this_month: month.rows[0] });
+}));
+
+app.get('/api/purchases/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const own = await pool.query('SELECT id FROM purchases WHERE id=$1 AND user_id=$2', [Number(req.params.id) || 0, req.user.id]);
+  if (!own.rowCount) return res.status(404).json({ error: 'not_found', message: 'Purchase not found.' });
+  res.json({ purchase: await purchaseWithItems(pool, own.rows[0].id) });
+}));
+
+app.post('/api/purchases', requireUser, requireAccess, wrap(async (req, res) => {
+  const { p, error } = readPurchase(req.body || {});
+  if (error) return bad(res, error);
+  try {
+    const out = await inTx(async (client) => {
+      await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
+      const r = await client.query('INSERT INTO purchases(user_id, supplier, invoice_no, purchase_date, total, note) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+        [req.user.id, p.supplier, p.invoice_no, p.purchase_date, p.total, p.note]);
+      await applyPurchaseItems(client, req.user, r.rows[0].id, p);
+      return { id: r.rows[0].id };
+    });
+    res.status(201).json({ purchase: await purchaseWithItems(pool, out.id) });
+  } catch (e) {
+    if (e.limitMessage) return res.status(403).json({ error: 'limit', message: e.limitMessage });
+    throw e;
+  }
+}));
+
+app.put('/api/purchases/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const { p, error } = readPurchase(req.body || {});
+  if (error) return bad(res, error);
+  try {
+    const out = await inTx(async (client) => {
+      await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
+      const own = await client.query('SELECT id FROM purchases WHERE id=$1 AND user_id=$2 FOR UPDATE', [Number(req.params.id) || 0, req.user.id]);
+      if (!own.rowCount) return { rollback: true, notFound: true };
+      const id = own.rows[0].id;
+      const short = await reversePurchaseItems(client, req.user.id, id);
+      await client.query('UPDATE purchases SET supplier=$1, invoice_no=$2, purchase_date=$3, total=$4, note=$5, updated_at=now() WHERE id=$6',
+        [p.supplier, p.invoice_no, p.purchase_date, p.total, p.note, id]);
+      await applyPurchaseItems(client, req.user, id, p);
+      return { id, short };
+    });
+    if (out.notFound) return res.status(404).json({ error: 'not_found', message: 'Purchase not found.' });
+    res.json({ purchase: await purchaseWithItems(pool, out.id), short: out.short });
+  } catch (e) {
+    if (e.limitMessage) return res.status(403).json({ error: 'limit', message: e.limitMessage });
+    throw e;
+  }
+}));
+
+app.delete('/api/purchases/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const out = await inTx(async (client) => {
+    const own = await client.query('SELECT id FROM purchases WHERE id=$1 AND user_id=$2 FOR UPDATE', [Number(req.params.id) || 0, req.user.id]);
+    if (!own.rowCount) return { rollback: true, notFound: true };
+    const short = await reversePurchaseItems(client, req.user.id, own.rows[0].id);
+    await client.query('DELETE FROM purchases WHERE id=$1', [own.rows[0].id]);
+    return { short };
+  });
+  if (out.notFound) return res.status(404).json({ error: 'not_found', message: 'Purchase not found.' });
+  res.json({ ok: true, short: out.short });
+}));
+
+// ---------- udhaar khata (customer credit ledger) ----------
+async function findOrCreateCustomer(db, userId, name, phone) {
+  const r = phone
+    ? await db.query('SELECT * FROM customers WHERE user_id=$1 AND phone=$2 ORDER BY id LIMIT 1', [userId, phone])
+    : await db.query("SELECT * FROM customers WHERE user_id=$1 AND phone='' AND lower(name)=lower($2) ORDER BY id LIMIT 1", [userId, name]);
+  if (r.rowCount) return r.rows[0];
+  const ins = await db.query('INSERT INTO customers(user_id, name, phone) VALUES ($1,$2,$3) RETURNING *', [userId, name, phone]);
+  return ins.rows[0];
+}
+
+const CUST_BAL = `COALESCE((SELECT sum(CASE WHEN e.kind='udhaar' THEN e.amount ELSE -e.amount END) FROM khata_entries e WHERE e.customer_id=c.id),0)::float`;
+
+function readCustomer(b) {
+  const name = str(b.name, 80);
+  const phone = cleanPhone(b.phone);
+  if (name.length < 2) return { error: 'Customer ka naam likhein. / Enter the customer name.' };
+  if (phone && !/^[6-9]\d{9}$/.test(phone)) return { error: 'Mobile number 10 digit ka hona chahiye (ya khaali chhodein). / Mobile should be 10 digits.' };
+  return { c: { name, phone } };
+}
+
+app.get('/api/khata', requireUser, requireAccess, wrap(async (req, res) => {
+  const q = await pool.query(
+    `SELECT c.id, c.name, c.phone, ${CUST_BAL} AS balance,
+            (SELECT to_char(max(e.entry_date),'YYYY-MM-DD') FROM khata_entries e WHERE e.customer_id=c.id) AS last_date
+       FROM customers c WHERE c.user_id=$1 ORDER BY balance DESC, c.name ASC LIMIT 1000`, [req.user.id]);
+  const owing = q.rows.filter((r) => r.balance > 0.004);
+  res.json({ customers: q.rows, total_due: round2(owing.reduce((s, r) => s + r.balance, 0)), owing_count: owing.length });
+}));
+
+app.post('/api/khata/customers', requireUser, requireAccess, wrap(async (req, res) => {
+  const { c, error } = readCustomer(req.body || {});
+  if (error) return bad(res, error);
+  if (c.phone) {
+    const d = await pool.query('SELECT id, name FROM customers WHERE user_id=$1 AND phone=$2 LIMIT 1', [req.user.id, c.phone]);
+    if (d.rowCount) return res.status(409).json({ error: 'duplicate', message: `Is number pe pehle se customer hai: ${d.rows[0].name}. / A customer with this number exists.`, existing: d.rows[0] });
+  }
+  const r = await pool.query('INSERT INTO customers(user_id, name, phone) VALUES ($1,$2,$3) RETURNING id, name, phone', [req.user.id, c.name, c.phone]);
+  res.status(201).json({ customer: { ...r.rows[0], balance: 0 } });
+}));
+
+app.get('/api/khata/customers/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const c = await pool.query(`SELECT c.id, c.name, c.phone, ${CUST_BAL} AS balance FROM customers c WHERE c.id=$1 AND c.user_id=$2`, [Number(req.params.id) || 0, req.user.id]);
+  if (!c.rowCount) return res.status(404).json({ error: 'not_found', message: 'Customer not found.' });
+  const e = await pool.query(
+    `SELECT e.id, e.kind, e.amount::float AS amount, e.note, e.bill_id, b.bill_no, to_char(e.entry_date,'YYYY-MM-DD') AS entry_date, e.created_at
+       FROM khata_entries e LEFT JOIN bills b ON b.id=e.bill_id WHERE e.customer_id=$1 ORDER BY e.entry_date ASC, e.id ASC`, [c.rows[0].id]);
+  let run = 0;
+  const entries = e.rows.map((x) => { run = round2(run + (x.kind === 'udhaar' ? x.amount : -x.amount)); return { ...x, balance: run }; });
+  res.json({ customer: c.rows[0], entries: entries.reverse() });
+}));
+
+app.put('/api/khata/customers/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const { c, error } = readCustomer(req.body || {});
+  if (error) return bad(res, error);
+  const r = await pool.query('UPDATE customers SET name=$1, phone=$2 WHERE id=$3 AND user_id=$4 RETURNING id, name, phone', [c.name, c.phone, Number(req.params.id) || 0, req.user.id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'not_found', message: 'Customer not found.' });
+  res.json({ customer: r.rows[0] });
+}));
+
+app.delete('/api/khata/customers/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const r = await pool.query('DELETE FROM customers WHERE id=$1 AND user_id=$2', [Number(req.params.id) || 0, req.user.id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'not_found', message: 'Customer not found.' });
+  res.json({ ok: true });
+}));
+
+// One entry: kind 'udhaar' (customer took on credit) or 'payment' (customer paid back).
+// Customer by customer_id, or by name + phone (found or created). Optional bill_id links an existing bill (once).
+app.post('/api/khata/entries', requireUser, requireAccess, wrap(async (req, res) => {
+  const b = req.body || {};
+  const kind = b.kind === 'payment' ? 'payment' : b.kind === 'udhaar' ? 'udhaar' : null;
+  if (!kind) return bad(res, 'Choose udhaar or payment.');
+  const amount = round2(Number(b.amount));
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 10000000) return bad(res, 'Amount sahi likhein (0 se zyada). / Enter a valid amount.', 'amount');
+  const date = b.entry_date ? str(b.entry_date, 10) : istDate(0);
+  if (!isDate(date)) return bad(res, 'Date sahi chunein. / Choose a valid date.', 'entry_date');
+  const note = str(b.note, 120);
+  const out = await inTx(async (client) => {
+    let cust;
+    if (b.customer_id) {
+      const c = await client.query('SELECT * FROM customers WHERE id=$1 AND user_id=$2', [Number(b.customer_id) || 0, req.user.id]);
+      if (!c.rowCount) return { rollback: true, status: 404, body: { error: 'not_found', message: 'Customer not found.' } };
+      cust = c.rows[0];
+    } else {
+      const { c, error } = readCustomer({ name: b.customer_name, phone: b.customer_phone });
+      if (error) return { rollback: true, status: 400, body: { error: 'invalid', message: error, field: 'customer_name' } };
+      cust = await findOrCreateCustomer(client, req.user.id, c.name, c.phone);
+    }
+    let billId = null;
+    if (b.bill_id) {
+      const bl = await client.query('SELECT id, bill_no FROM bills WHERE id=$1 AND user_id=$2', [Number(b.bill_id) || 0, req.user.id]);
+      if (!bl.rowCount) return { rollback: true, status: 404, body: { error: 'not_found', message: 'Bill not found.' } };
+      const used = await client.query('SELECT 1 FROM khata_entries WHERE bill_id=$1', [bl.rows[0].id]);
+      if (used.rowCount) return { rollback: true, status: 409, body: { error: 'duplicate', message: 'Ye bill pehle se udhaar mein hai. / This bill is already in the udhaar khata.' } };
+      billId = bl.rows[0].id;
+    }
+    const e = await client.query('INSERT INTO khata_entries(user_id, customer_id, kind, amount, note, bill_id, entry_date) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+      [req.user.id, cust.id, kind, amount, note, kind === 'udhaar' ? billId : null, date]);
+    return { status: 201, body: { entry_id: e.rows[0].id, customer_id: cust.id } };
+  });
+  res.status(out.status).json(out.body);
+}));
+
+app.delete('/api/khata/entries/:id', requireUser, requireAccess, wrap(async (req, res) => {
+  const r = await pool.query('DELETE FROM khata_entries WHERE id=$1 AND user_id=$2', [Number(req.params.id) || 0, req.user.id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'not_found', message: 'Entry not found.' });
+  res.json({ ok: true });
+}));
+
+// Is this bill already written in the udhaar khata? (bill view uses it)
+app.get('/api/bills/:id/udhaar', requireUser, requireAccess, wrap(async (req, res) => {
+  const r = await pool.query('SELECT e.customer_id, c.name FROM khata_entries e JOIN customers c ON c.id=e.customer_id JOIN bills b ON b.id=e.bill_id WHERE e.bill_id=$1 AND b.user_id=$2', [Number(req.params.id) || 0, req.user.id]);
+  res.json({ udhaar: r.rows[0] || null });
 }));
 
 // ---------- billing ----------
@@ -597,7 +903,7 @@ async function markPaid(orderId, paymentId, source) {
     await client.query("UPDATE payments SET status='paid', razorpay_payment_id=COALESCE($2, razorpay_payment_id), paid_at=now() WHERE id=$1", [pay.id, paymentId || null]);
     await client.query(
       `UPDATE users SET plan=$1, paid_until = GREATEST(COALESCE(paid_until, trial_ends_at), now()) + ($2 || ' days')::interval WHERE id=$3`,
-      [pay.plan, String(PERIOD_DAYS), pay.user_id]
+      [pay.plan, String(planDays(pay.plan)), pay.user_id]
     );
     await client.query('COMMIT');
     console.log(`payment marked paid via ${source}: order ${orderId}`);

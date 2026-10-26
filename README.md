@@ -4,9 +4,9 @@ Stock, expiry and refill tracking for medical stores and clinics in India.
 
 - Marketing site + legal pages (Privacy, Terms, Refund & Cancellation, Shipping & Delivery, Contact)
 - Accounts with mobile number/email + password (scrypt hashed), cookie sessions
-- 2-day free trial that starts at signup and is enforced on the server
+- 14-day free trial (all features) that starts at signup; afterwards the store drops to the Free plan (100 medicines, 50 bills/month, 20 refill reminders), enforced on the server
 - Dashboard: medicines (name, batch, expiry, quantity, price, low-stock level, supplier), expiry alerts (30/60/90 days), low-stock alerts, refill reminders with WhatsApp click-to-chat links, CSV export
-- Plans: Basic ₹299, Pro ₹599, Clinic+ ₹999 per 30 days, paid through Razorpay Orders (checkout + server-side signature check + webhook)
+- Paid plan: Pro ₹149 / 30 days or ₹1,499 / 365 days (lib/plans.js), paid through Razorpay Orders (checkout + server-side signature check + webhook)
 
 ## Run
 
@@ -34,3 +34,9 @@ Tables are created automatically on start.
 ```
 TEST_DATABASE_URL=postgres://... npm test
 ```
+
+
+## v2 (Oct 26 2026)
+- Purchase entry: /api/purchases (supplier, bill no, date, items with batch/expiry/qty/rate/MRP). Saving adds to stock (same name+batch -> qty up; else new medicine). Edit/delete reverse the stock (never below 0). Supplier-wise totals.
+- Udhaar khata: /api/khata (customers + entries udhaar/payment, running balance, total due). A bill can go on udhaar at save time (udhaar: true) or later from the bill view; cancelling a bill removes its udhaar line.
+- Frontend also served by tab.bot worker (deploy/tabbot-worker) that proxies /api/* to Render, same as Netlify's _redirects.

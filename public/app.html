@@ -20,8 +20,8 @@
   <button role="tab" data-tab="home" aria-selected="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span>Home</span></button>
   <button role="tab" data-tab="bills" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg><span>Bills</span></button>
   <button role="tab" data-tab="stock" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span>Stock</span></button>
-  <button role="tab" data-tab="refills" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 01-9 8.4 8.6 8.6 0 01-4-1L3 20l1.2-4.5A8.4 8.4 0 1121 11.5z"/></svg><span>Refills</span></button>
-  <button role="tab" data-tab="plan" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg><span>Plan</span></button>
+  <button role="tab" data-tab="udhaar" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12a4 4 0 014 4v12H8a4 4 0 01-4-4z"/><path d="M9 9h6M9 13h6M12 13v4"/></svg><span>Udhaar</span></button>
+  <button role="tab" data-tab="more" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg><span>More</span></button>
 </nav></div>
 <main id="main" class="wrap">
   <div id="status" class="status" hidden></div>
@@ -29,7 +29,13 @@
   <div id="loading" class="loading">Loading your store… (the first load can take up to a minute)</div>
 
   <section class="panel" id="tab-home" role="tabpanel" hidden>
-    <div class="panel-head"><h2>Today at a glance</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" type="button" data-new-bill>+ New bill</button><button class="btn btn-primary btn-sm" type="button" data-add-med>+ Add medicine</button></div></div>
+    <div class="panel-head"><h2>Today at a glance</h2></div>
+    <div class="quick" role="group" aria-label="Quick actions">
+      <button type="button" class="q q-bill" data-new-bill><span class="q-ic">🧾</span><b>New bill</b><small>नया बिल</small></button>
+      <button type="button" class="q q-pur" data-new-purchase><span class="q-ic">📦</span><b>Purchase entry</b><small>माल आया</small></button>
+      <button type="button" class="q q-udh" data-go="udhaar"><span class="q-ic">📒</span><b>Udhaar khata</b><small>उधार</small></button>
+      <button type="button" class="q q-med" data-add-med><span class="q-ic">💊</span><b>Add medicine</b><small>दवा जोड़ें</small></button>
+    </div>
     <div class="stats" id="stats"></div>
     <div id="alerts"></div>
   </section>
@@ -65,6 +71,7 @@
         </div>
         <div class="bill-totals" id="b-totals"></div>
       </div>
+      <label class="check-row"><input type="checkbox" id="b-udhaar"> <span><b>Udhaar</b> — paise baad mein (customer naam zaroori)</span></label>
       <div class="alert alert-error" id="b-err" role="alert" hidden></div>
       <div class="bill-save"><button class="btn btn-primary btn-block" type="submit" id="b-save">Save bill / बिल सेव करें</button></div>
     </form>
@@ -75,6 +82,7 @@
     <div class="bill-acts no-print">
       <button class="btn btn-primary" type="button" id="bv-print">🖨️ Print</button>
       <a class="btn btn-wa" id="bv-wa" href="#" target="_blank" rel="noopener">WhatsApp pe bhejo</a>
+      <button class="btn btn-ghost" type="button" id="bv-udhaar">📒 Udhaar mein likho</button>
       <label class="paper"><span>Paper</span><select id="bv-paper" aria-label="Paper size"><option value="58">58 mm</option><option value="80">80 mm</option><option value="a4">A4</option></select></label>
     </div>
     <div class="inv-wrap"><div id="invoice" class="invoice inv-80"></div></div>
@@ -82,7 +90,8 @@
   </section>
 
   <section class="panel" id="tab-stock" role="tabpanel" hidden>
-    <div class="panel-head"><h2>Stock</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-ghost btn-sm" id="csv-stock" href="/api/medicines.csv">Download CSV</a><button class="btn btn-primary btn-sm" type="button" data-add-med>+ Add medicine</button></div></div>
+    <div class="panel-head"><h2>Stock</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" type="button" data-go="purchases">📦 Purchases</button><button class="btn btn-primary btn-sm" type="button" data-add-med>+ Add medicine</button></div></div>
+    <p class="small muted" style="margin:-6px 0 10px">Distributor se maal aaya? <button class="linkbtn" type="button" data-new-purchase>Purchase entry karein</button> — stock apne aap badh jayega. · <a id="csv-stock" href="/api/medicines.csv">Download CSV</a></p>
     <div class="toolbar"><label class="sr-only" for="search">Search medicines</label><input id="search" type="search" placeholder="Search by name, batch or supplier"></div>
     <div class="chips" role="group" aria-label="Filter">
       <button class="chip" type="button" data-filter="all" aria-pressed="true">All</button>
@@ -93,14 +102,69 @@
     <div class="list" id="med-list"></div>
   </section>
 
+  <section class="panel" id="tab-purchases" role="tabpanel" hidden>
+    <div class="panel-head"><h2>Purchases <span class="muted hi">· खरीद</span></h2><button class="btn btn-primary btn-sm" type="button" data-new-purchase>+ New purchase</button></div>
+    <div class="sales-card" id="pur-card"></div>
+    <div id="pur-filter"></div>
+    <div class="list" id="pur-list"></div>
+    <div class="group" id="sup-wrap"><h3>Supplier-wise total</h3><div class="list" id="sup-list"></div></div>
+  </section>
+
+  <section class="panel" id="tab-purchaseform" role="tabpanel" hidden>
+    <div class="panel-head"><h2 id="pf-title">New purchase</h2><button class="btn btn-ghost btn-sm" type="button" data-go="purchases">← Purchases</button></div>
+    <form class="form" id="pur-form" novalidate autocomplete="off">
+      <div class="section-card">
+        <div class="field"><label for="pf-sup">Supplier / distributor</label><input id="pf-sup" list="sup-names" maxlength="80" required placeholder="e.g. Maa Tara Pharma"><datalist id="sup-names"></datalist></div>
+        <div class="row2"><div class="field"><label for="pf-inv">Bill no. <span class="muted">(optional)</span></label><input id="pf-inv" maxlength="40"></div><div class="field"><label for="pf-date">Date</label><input id="pf-date" type="date" required></div></div>
+      </div>
+      <datalist id="med-names"></datalist>
+      <div id="pf-lines"></div>
+      <button class="btn btn-ghost btn-block" type="button" id="pf-add">+ Add medicine line</button>
+      <div class="section-card pf-total"><span>Total (purchase rate × qty)</span><strong id="pf-total">₹0</strong></div>
+      <p class="small muted">Same naam + batch ki dawai stock mein hai to uski quantity badhegi (expiry/MRP update). Nayi dawai stock mein jud jayegi.</p>
+      <div class="alert alert-error" id="pf-err" role="alert" hidden></div>
+      <div class="bill-save"><button class="btn btn-primary btn-block" type="submit" id="pf-save">Save purchase / स्टॉक में जोड़ें</button></div>
+      <p class="center" style="margin-top:14px"><button class="btn btn-danger btn-sm" type="button" id="pf-del" hidden>Delete purchase (stock se hatao)</button></p>
+    </form>
+  </section>
+
+  <section class="panel" id="tab-udhaar" role="tabpanel" hidden>
+    <div class="panel-head"><h2>Udhaar khata <span class="muted hi">· उधार</span></h2><button class="btn btn-primary btn-sm" type="button" data-khata="udhaar">+ Udhaar likho</button></div>
+    <div class="sales-card due-card" id="udh-card"></div>
+    <div class="toolbar"><label class="sr-only" for="udh-search">Search customers</label><input id="udh-search" type="search" placeholder="Customer naam ya mobile"></div>
+    <div class="list" id="udh-list"></div>
+  </section>
+
+  <section class="panel" id="tab-customer" role="tabpanel" hidden>
+    <div class="panel-head"><h2 id="cu-name">Customer</h2><button class="btn btn-ghost btn-sm" type="button" data-go="udhaar">← Udhaar</button></div>
+    <div class="sales-card due-card" id="cu-card"></div>
+    <div class="cu-acts">
+      <button class="btn btn-danger-soft" type="button" data-khata="udhaar" data-for-current>+ Udhaar</button>
+      <button class="btn btn-primary" type="button" data-khata="payment" data-for-current>₹ Payment mila</button>
+      <a class="btn btn-wa" id="cu-wa" href="#" target="_blank" rel="noopener">WhatsApp reminder</a>
+    </div>
+    <h3 style="margin:18px 0 8px">Hisaab <span class="muted hi">· हिसाब</span></h3>
+    <div class="list" id="cu-entries"></div>
+    <p class="center small" style="margin-top:18px"><button class="linkbtn" type="button" id="cu-edit">Naam/mobile badlein</button> · <button class="linkbtn danger" type="button" id="cu-del">Customer delete</button></p>
+  </section>
+
+  <section class="panel" id="tab-more" role="tabpanel" hidden>
+    <div class="panel-head"><h2>More</h2></div>
+    <div class="more-list">
+      <button type="button" class="more-item" data-go="purchases"><span>📦</span><b>Purchases / खरीद</b><small>Distributor bills, supplier-wise total</small></button>
+      <button type="button" class="more-item" data-go="refills"><span>💬</span><b>Refill reminders</b><small>Patients ko WhatsApp reminder</small></button>
+      <button type="button" class="more-item" data-go="plan"><span>⭐</span><b>Plan &amp; store details</b><small>Free / Pro, bill header, password</small></button>
+    </div>
+  </section>
+
   <section class="panel" id="tab-refills" role="tabpanel" hidden>
-    <div class="panel-head"><h2>Refill reminders</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-ghost btn-sm" id="csv-rem" href="/api/reminders.csv">Download CSV</a><button class="btn btn-primary btn-sm" type="button" id="add-rem">+ Add patient</button></div></div>
+    <div class="panel-head"><h2>Refill reminders</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" type="button" data-go="more">← More</button><a class="btn btn-ghost btn-sm" id="csv-rem" href="/api/reminders.csv">Download CSV</a><button class="btn btn-primary btn-sm" type="button" id="add-rem">+ Add patient</button></div></div>
     <p class="muted small">Tap “Send on WhatsApp” to open WhatsApp with the message ready. After you send it, the next refill date moves forward automatically.</p>
     <div class="list" id="rem-list"></div>
   </section>
 
   <section class="panel" id="tab-plan" role="tabpanel" hidden>
-    <div class="panel-head"><h2>Plan &amp; billing</h2></div>
+    <div class="panel-head"><h2>Plan &amp; billing</h2><button class="btn btn-ghost btn-sm" type="button" data-go="more">← More</button></div>
     <div id="pay-note"></div>
     <div class="section-card" id="plan-current"></div>
     <div class="plan-cards" id="plan-cards"></div>
@@ -143,6 +207,26 @@
   <p class="small muted">Please add only patients who are happy to get reminders from your store.</p>
   <div class="alert alert-error" id="r-err" role="alert" hidden></div>
   <div class="dlg-acts"><button class="btn btn-danger btn-sm" type="button" id="r-del" hidden>Delete</button><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
+</form></dialog>
+<dialog id="kh-dlg"><form class="dlg form" id="kh-form" method="dialog" novalidate autocomplete="off">
+  <h2 id="kh-title">Udhaar likho</h2>
+  <div id="kh-cust">
+    <div class="field"><label for="kh-name">Customer naam</label><input id="kh-name" list="cust-names" maxlength="80" placeholder="e.g. Ramesh Kumar"><datalist id="cust-names"></datalist></div>
+    <div class="field"><label for="kh-phone">Mobile <span class="muted">(WhatsApp reminder ke liye)</span></label><input id="kh-phone" type="tel" inputmode="numeric" maxlength="14" placeholder="10-digit number"></div>
+  </div>
+  <p class="small" id="kh-for" hidden></p>
+  <div class="row2"><div class="field"><label for="kh-amt">Amount (₹)</label><input id="kh-amt" type="number" inputmode="decimal" min="0" step="0.01" required></div><div class="field"><label for="kh-date">Date</label><input id="kh-date" type="date" required></div></div>
+  <div class="field"><label for="kh-note">Note <span class="muted">(optional)</span></label><input id="kh-note" maxlength="120" placeholder="e.g. BP ki dawai"></div>
+  <div class="alert alert-error" id="kh-err" role="alert" hidden></div>
+  <div class="dlg-acts"><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit" id="kh-save">Save</button></div>
+</form></dialog>
+
+<dialog id="cu-dlg"><form class="dlg form" id="cu-form" method="dialog" novalidate autocomplete="off">
+  <h2>Customer details</h2>
+  <div class="field"><label for="cu-n">Naam</label><input id="cu-n" maxlength="80" required></div>
+  <div class="field"><label for="cu-p">Mobile <span class="muted">(optional)</span></label><input id="cu-p" type="tel" inputmode="numeric" maxlength="14"></div>
+  <div class="alert alert-error" id="cu-err" role="alert" hidden></div>
+  <div class="dlg-acts"><button class="btn btn-ghost" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
 </form></dialog>
 </body>
 </html>

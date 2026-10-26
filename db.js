@@ -130,6 +130,57 @@ CREATE TABLE IF NOT EXISTS bill_items (
   amount NUMERIC(12,2) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bill_items_bill_idx ON bill_items(bill_id);
+-- v2 (Oct 26 2026): purchase entry + udhaar khata. Additive only.
+CREATE TABLE IF NOT EXISTS purchases (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  supplier TEXT NOT NULL,
+  invoice_no TEXT NOT NULL DEFAULT '',
+  purchase_date DATE NOT NULL,
+  total NUMERIC(12,2) NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS purchases_user_date_idx ON purchases(user_id, purchase_date);
+CREATE TABLE IF NOT EXISTS purchase_items (
+  id SERIAL PRIMARY KEY,
+  purchase_id INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+  medicine_id INTEGER REFERENCES medicines(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  batch TEXT NOT NULL DEFAULT '',
+  expiry DATE NOT NULL,
+  qty INTEGER NOT NULL,
+  rate NUMERIC(10,2) NOT NULL DEFAULT 0,
+  mrp NUMERIC(10,2) NOT NULL DEFAULT 0,
+  amount NUMERIC(12,2) NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS purchase_items_purchase_idx ON purchase_items(purchase_id);
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS purchase_rate NUMERIC(10,2);
+CREATE TABLE IF NOT EXISTS customers (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  phone TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS customers_user_idx ON customers(user_id);
+CREATE TABLE IF NOT EXISTS khata_entries (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('udhaar','payment')),
+  amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  note TEXT NOT NULL DEFAULT '',
+  bill_id INTEGER REFERENCES bills(id) ON DELETE CASCADE,
+  entry_date DATE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS khata_entries_customer_idx ON khata_entries(customer_id, entry_date);
+CREATE UNIQUE INDEX IF NOT EXISTS khata_entries_bill_uq ON khata_entries(bill_id) WHERE bill_id IS NOT NULL;
+-- Trial is now 14 days: stores that never paid get their trial counted as 14 days from signup (only ever extends).
+UPDATE users SET trial_ends_at = created_at + interval '14 days'
+ WHERE paid_until IS NULL AND trial_ends_at < created_at + interval '14 days';
 `;
 
 async function migrate(pool) {
