@@ -181,6 +181,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS khata_entries_bill_uq ON khata_entries(bill_id
 -- v3 (Oct 26 2026): trial is 7 days, no free plan, read-only after the trial. One-time: every store that never paid
 -- gets a fresh 7-day trial from the moment this migration first runs. Runs once (recorded in app_migrations).
 CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, ran_at TIMESTAMPTZ NOT NULL DEFAULT now());
+-- AI Assistant (Oct 26 2026): public WhatsApp order link per store (random code, not the numeric id) + the number orders go to.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS order_code TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS order_phone TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS users_order_code_uq ON users(order_code) WHERE order_code IS NOT NULL;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE name = 'v3_trial7_2026_10_26') THEN

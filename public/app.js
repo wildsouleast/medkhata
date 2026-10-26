@@ -144,7 +144,7 @@
     var NAV = { newbill: 'bills', billview: 'bills', purchases: 'stock', purchaseform: 'stock', customer: 'udhaar', refills: 'more', plan: 'more' };
     var navName = NAV[name] || name;
     document.querySelectorAll('.tabs button').forEach(function (b) { b.setAttribute('aria-selected', b.dataset.tab === navName ? 'true' : 'false'); });
-    ['home', 'bills', 'newbill', 'billview', 'stock', 'purchases', 'purchaseform', 'udhaar', 'customer', 'more', 'refills', 'plan'].forEach(function (t) { $('tab-' + t).hidden = t !== name; });
+    ['home', 'bills', 'newbill', 'billview', 'stock', 'purchases', 'purchaseform', 'udhaar', 'customer', 'more', 'refills', 'plan', 'ai'].forEach(function (t) { $('tab-' + t).hidden = t !== name; });
     if (name === 'purchases') loadPurchases();
     if (name === 'udhaar') loadKhata();
     if (name === 'home') loadHome();
@@ -153,6 +153,7 @@
     if (name === 'newbill') startBill();
     if (name === 'refills') loadReminders();
     if (name === 'plan') loadPlan();
+    if (name === 'ai') loadAI();
     window.scrollTo(0, 0);
   }
 
@@ -294,7 +295,12 @@
     $('bill-form').reset(); $('b-err').hidden = true; $('b-results').innerHTML = '';
     $('b-disc-type').value = 'percent'; $('b-gst-mode').value = 'none'; $('b-gst').value = '12';
     renderLines();
-    api('GET', '/api/medicines').then(function (r) { state.meds = r.medicines; }).catch(showError);
+    $('b-refill').checked = false; $('b-refill-days-f').hidden = true; $('b-refill-row').hidden = !hasPro();
+    api('GET', '/api/medicines').then(function (r) {
+      state.meds = r.medicines;
+      var pick = state.pendingBill; state.pendingBill = null;
+      if (pick && pick.length) { pick.forEach(function (id) { addLine(id); }); toast(pick.length + ' dawai parchi scan se bill mein daali — qty/price check karein'); }
+    }).catch(showError);
   }
   function renderResults() {
     var q = ($('b-search').value || '').trim().toLowerCase();
@@ -307,6 +313,7 @@
     }).join('');
   }
   $('b-search').addEventListener('input', renderResults);
+  $('b-refill').addEventListener('change', function () { $('b-refill-days-f').hidden = !this.checked; });
   $('b-search').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var p = $('b-results').querySelector('.pick:not([disabled])'); if (p) p.click(); } });
 
   function addLine(id) {
@@ -377,7 +384,17 @@
       discount_type: t.dt, discount_value: t.dv, gst_mode: t.mode, gst_percent: t.pct,
     };
     btn.disabled = true; err.hidden = true; btn.textContent = 'Saving…';
+    var refill = $('b-refill').checked && hasPro();
+    if (refill && (!data.customer_name.trim() || !/^[6-9]\d{9}$/.test(String(data.customer_phone).replace(/\D/g, '').slice(-10)))) {
+      err.textContent = 'Monthly dawai reminder ke liye customer ka naam aur 10 digit mobile number likhein.'; err.hidden = false; return;
+    }
+    var refillMeds = bill.lines.map(function (l) { return l.med.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; }).join(', ').slice(0, 120);
+    var refillDays = Number($('b-refill-days').value) || 30;
     api('POST', '/api/bills', data).then(function (r) {
+      if (refill) {
+        api('POST', '/api/reminders', { patient_name: data.customer_name.trim(), phone: String(data.customer_phone).replace(/\D/g, '').slice(-10), medicine: refillMeds, every_days: refillDays, next_due: todayISO(refillDays) })
+          .then(function () { toast('🔁 Refill reminder laga: ' + refillDays + ' din baad'); }).catch(function (x) { toast('Reminder nahi laga: ' + x.message); });
+      }
       toast('Bill #' + r.bill.bill_no + ' saved. Stock updated.' + (data.udhaar ? ' Udhaar mein likha.' : ''));
       if (state.usage) state.usage.bills_this_month++;
       openBill(r.bill);
@@ -610,7 +627,7 @@
     else if (t.hasAttribute('data-close')) t.closest('dialog').close();
     else if (t.dataset.sent) {
       var id = t.dataset.sent;
-      setTimeout(function () { api('POST', '/api/reminders/' + id + '/sent').then(function () { toast('Marked as sent. Next refill date updated.'); loadReminders(); }).catch(function () {}); }, 400);
+      setTimeout(function () { api('POST', '/api/reminders/' + id + '/sent').then(function () { toast('Marked as sent. Next refill date updated.'); if (state.tab === 'ai') loadAIDue(); else loadReminders(); }).catch(function () {}); }, 400);
     }
   });
   document.querySelectorAll('.chip[data-filter]').forEach(function (c) {
@@ -828,6 +845,221 @@
     api('DELETE', '/api/khata/customers/' + curCustomer.id).then(function () { toast('Customer deleted'); curCustomer = null; showTab('udhaar'); }).catch(showError);
   });
 
+
+  // ---------- AI Assistant (order link + QR, parchi scan, aaj ke reminders) ----------
+  // Order links always point at the store's own-domain copy of the app, whichever host the owner is using.
+  var ORDER_BASE = 'https://dawalekh.publicvm.com';
+  var aiOrder = null, scanPicks = [];
+  function hasPro() { return !!(state.limits && state.limits.purchases); }
+  var scriptCache = {};
+  function loadScript(src) {
+    if (!scriptCache[src]) scriptCache[src] = new Promise(function (res, rej) { var s = document.createElement('script'); s.src = src; s.async = true; s.onload = res; s.onerror = function () { delete scriptCache[src]; rej(new Error('Internet slow hai — script load nahi hui. Dobara try karein.')); }; document.head.appendChild(s); });
+    return scriptCache[src];
+  }
+  function orderUrl() { return ORDER_BASE + '/order?s=' + aiOrder.code; }
+  function qrSvg(text) { var q = window.qrcode(0, 'M'); q.addData(text); q.make(); return q.createSvgTag({ cellSize: 6, margin: 2, scalable: true, alt: 'QR code: ' + text }); }
+  function lockCard(what) {
+    var s = state.user && state.user.status;
+    var msg = s && s.state === 'expired' ? 'Store read-only hai. ' + what + ' ke liye plan lein.' : what + ' Pro plan mein hai (₹149/mahina). Trial mein sab khula hota hai.';
+    return '<div class="ai-lock"><span>🔒</span><p>' + esc(msg) + '</p><button class="btn btn-primary btn-sm" type="button" data-go="plan">Pro dekho</button></div>';
+  }
+  function loadAI() {
+    var s = state.user.status, pro = hasPro();
+    $('ai-plan').innerHTML = s.state === 'trial' ? ''
+      : s.state === 'expired' ? '<div class="alert alert-warn small">🔒 Store read-only hai. Order link chalta rahega; scan aur reminders ke liye plan lein.</div>'
+      : pro ? '' : '<div class="alert alert-info small">Basic plan: WhatsApp order link + QR free. Parchi scan aur aaj ke reminders <b>Pro</b> mein.</div>';
+    $('ai-scan-lock').hidden = pro; $('ai-scan-body').hidden = !pro; if (!pro) $('ai-scan-lock').innerHTML = lockCard('AI parchi scan');
+    $('ai-refill-lock').hidden = pro; $('ai-refill-body').hidden = !pro; if (!pro) $('ai-refill-lock').innerHTML = lockCard('Aaj ke refill reminders');
+    loadOrderLink();
+    if (pro) loadAIDue();
+  }
+  function loadOrderLink() {
+    Promise.all([api('GET', '/api/ai/order-link'), loadScript('/vendor/qrcode.min.js')]).then(function (res) {
+      aiOrder = res[0]; renderOrderLink();
+    }).catch(function (x) { $('ai-order-body').textContent = x.message || 'Link nahi bana. Page refresh karein.'; });
+  }
+  function renderOrderLink() {
+    var url = orderUrl(), num = aiOrder.order_phone || aiOrder.login_phone;
+    $('ai-order-body').innerHTML =
+      '<div class="ord-grid"><div class="ord-qr" id="ord-qr">' + qrSvg(url) + '</div><div class="ord-side">' +
+      '<label class="small muted" for="ord-url">Aapka order link</label><input id="ord-url" class="ord-url" readonly value="' + esc(url) + '">' +
+      '<div class="ord-btns"><button class="btn btn-ghost btn-sm" type="button" id="ord-copy">📋 Copy</button>' +
+      '<a class="btn btn-wa btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text=' + encodeURIComponent('🙏 ' + aiOrder.store_name + ' se dawai ab WhatsApp par order karein — naam likhein ya parchi ki photo bhejein: ' + url) + '">📤 Customers ko bhejo</a>' +
+      '<button class="btn btn-primary btn-sm" type="button" id="ord-poster">🖨️ Counter poster</button>' +
+      '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' + esc(url) + '">👀 Dekho</a></div>' +
+      '<p class="small muted" style="margin:8px 0 0">Orders is WhatsApp number par aayenge: <b>+91 ' + esc(num) + '</b> <button class="linkbtn" type="button" id="ord-chg">Badlo</button></p>' +
+      '<form id="ord-form" class="ord-form" hidden><input id="ord-phone" inputmode="numeric" maxlength="10" placeholder="10 digit WhatsApp number" value="' + esc(aiOrder.order_phone || '') + '"><button class="btn btn-primary btn-sm" type="submit">Save</button></form>' +
+      '</div></div>';
+    $('ord-copy').addEventListener('click', function () {
+      var done = function () { toast('Link copy ho gaya ✓'); };
+      if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, function () { $('ord-url').select(); document.execCommand('copy'); done(); });
+      else { $('ord-url').select(); document.execCommand('copy'); done(); }
+    });
+    $('ord-chg').addEventListener('click', function () { $('ord-form').hidden = !$('ord-form').hidden; if (!$('ord-form').hidden) $('ord-phone').focus(); });
+    $('ord-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      api('PUT', '/api/ai/order-link', { order_phone: $('ord-phone').value }).then(function (r) { aiOrder.order_phone = r.order_phone; renderOrderLink(); toast('Order number save ho gaya ✓'); }).catch(showError);
+    });
+    $('ord-poster').addEventListener('click', printPoster);
+  }
+  function printPoster() {
+    var url = orderUrl(), u = state.user;
+    var w = window.open('', '_blank');
+    if (!w) { toast('Popup block hua — browser mein popup allow karein.'); return; }
+    w.document.write('<!doctype html><html lang="hi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Order poster — ' + esc(u.store_name) + '</title><style>' +
+      '@page{size:A4;margin:12mm}body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;margin:0;color:#0f172a;text-align:center}' +
+      '.p{border:6px solid #0f766e;border-radius:28px;padding:28px 22px;max-width:640px;margin:16px auto}h1{font-size:40px;margin:6px 0 2px;color:#0f766e}' +
+      '.s{font-size:26px;font-weight:800;margin:0}.c{color:#475569;font-size:17px;margin:4px 0 16px}.q{width:330px;max-width:80vw;margin:6px auto}.q svg{width:100%;height:auto}' +
+      '.st{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:16px 0 8px}.st div{background:#f0fdfa;border:2px solid #99f6e4;border-radius:14px;padding:10px 12px;font-size:16px;font-weight:700;min-width:150px}' +
+      '.u{font-size:13px;color:#64748b;word-break:break-all}.wa{display:inline-block;background:#16a34a;color:#fff;border-radius:999px;padding:6px 18px;font-weight:800;font-size:20px;margin-top:6px}' +
+      '.b{margin-top:14px}@media print{.b{display:none}}button{font:inherit;font-size:18px;padding:10px 22px;border-radius:12px;border:0;background:#0f766e;color:#fff}</style></head><body><div class="p">' +
+      '<p class="s">' + esc(u.store_name) + '</p><p class="c">' + esc([u.store_address, u.city].filter(Boolean).join(', ')) + '</p>' +
+      '<h1>Dawai WhatsApp par order karein</h1><span class="wa">📱 Scan karo → order bhejo</span>' +
+      '<div class="q">' + qrSvg(url) + '</div>' +
+      '<div class="st"><div>1. Camera se QR scan karein</div><div>2. Dawai likhein ya parchi photo lagayein</div><div>3. WhatsApp par bhejein ✅</div></div>' +
+      '<p class="u">' + esc(url) + '</p></div><div class="b"><button onclick="window.print()">🖨️ Print karo</button></div>' +
+      '<script>setTimeout(function(){window.print()},600)<\/script></body></html>');
+    w.document.close();
+  }
+
+  // Refill reminders due today (or overdue).
+  function aiWa(r) {
+    var store = (state.user && state.user.store_name) || 'aapka medical store';
+    var msg = 'Namaste ' + r.patient_name + ' ji 🙏\n' + store + ' se yaad dila rahe hain — aapki monthly dawai (' + r.medicine + ') khatam hone wali hogi.\nRefill ke liye store aa jaiye, ya isi number par reply karein — hum dawai ready rakh denge.\nDhanyavaad!';
+    return 'https://wa.me/91' + r.phone + '?text=' + encodeURIComponent(msg);
+  }
+  function loadAIDue() {
+    return api('GET', '/api/reminders').then(function (r) {
+      state.reminders = r.reminders;
+      var due = r.reminders.filter(function (x) { return x.days_left <= 0; });
+      var soon = r.reminders.filter(function (x) { return x.days_left > 0 && x.days_left <= 3; }).length;
+      $('ai-due').innerHTML = (due.length ? due.map(function (x) {
+        return '<div class="item"><div class="main"><b>' + esc(x.patient_name) + '</b><small>' + esc(x.medicine) + '</small><small>har ' + x.every_days + ' din' + (x.last_sent_at ? ' · pichhla reminder ' + fmtDate(x.last_sent_at) : '') + '</small></div><div class="side">' + dueBadge(x.days_left) +
+          '<div class="acts"><a class="btn btn-wa btn-sm" href="' + aiWa(x) + '" target="_blank" rel="noopener" data-sent="' + x.id + '">💬 WhatsApp reminder</a></div></div></div>';
+      }).join('') : '<div class="empty">Aaj koi refill due nahi hai 🎉' + (r.reminders.length ? '' : '<br><small>Bill banate waqt “🔁 Monthly dawai” tick karein.</small>') + '</div>') +
+        (soon ? '<p class="small muted" style="margin:8px 0 0">Agle 3 din mein: <b>' + soon + '</b> patient</p>' : '');
+    }).catch(showError);
+  }
+
+  // ---- AI parchi scan: in-browser OCR (Tesseract.js, English) + fuzzy match against this store's stock ----
+  var TESS = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  var STOP = ('tab tabs tablet tablets cap caps capsule capsules syp syrup inj injection oint ointment cream gel drops drop susp suspension mg ml mcg gm gram ' +
+    'daily once twice thrice times day days week weeks month after before food meal meals morning night evening noon bedtime empty stomach with water ' +
+    'take dose doses od bd tds qid hs sos stat rx dr doctor patient name age sex male female date address phone clinic hospital signature sign reg regd mbbs md ' +
+    'diagnosis advice review follow followup the and for one two three four five half every per hour hours qty quantity total').split(' ');
+  function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+  function lev(a, b) {
+    if (a === b) return 0;
+    var m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+    var prev = [], cur = [], i, j;
+    for (j = 0; j <= n; j++) prev[j] = j;
+    for (i = 1; i <= m; i++) { cur = [i]; for (j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = cur; }
+    return prev[n];
+  }
+  function sim(a, b) { var d = lev(a, b); return 1 - d / Math.max(a.length, b.length); }
+  // Common OCR slips in medicine names: 0↔o, 1↔l, 5↔s.
+  function ocrFix(w) { return /[a-z]/.test(w) ? w.replace(/0/g, 'o').replace(/1/g, 'l').replace(/5/g, 's') : w; }
+  function matchStock(text, meds) {
+    var lines = String(text).split(/\n+/).map(norm).filter(Boolean);
+    var words = [];
+    lines.forEach(function (ln, li) { ln.split(' ').forEach(function (w) { words.push({ w: w, fx: ocrFix(w), line: li }); }); });
+    var byName = {};
+    meds.forEach(function (m) { var k = norm(m.name); (byName[k] = byName[k] || []).push(m); });
+    var out = [];
+    Object.keys(byName).forEach(function (k) {
+      var parts = k.split(' '), head = parts.filter(function (p) { return p.length >= 3 && !/^\d+$/.test(p) && STOP.indexOf(p) < 0; })[0];
+      if (!head) return;
+      var strength = (k.match(/\d+(\.\d+)?/) || [])[0];
+      var best = null;
+      words.forEach(function (o, idx) {
+        if (o.fx.length < 3 || STOP.indexOf(o.fx) >= 0 || /^\d+$/.test(o.fx)) return;
+        var sc = sim(o.fx, head);
+        var two = words[idx + 1] && words[idx + 1].line === o.line ? ocrFix(o.w + words[idx + 1].w) : null; // "Azi thral" split by OCR
+        if (two) sc = Math.max(sc, sim(two, head));
+        var need = head.length <= 4 ? 1 : head.length <= 6 ? 0.8 : 0.72;
+        if (sc + 1e-9 < need) return;
+        var bonus = 0;
+        if (strength) { var near = lines[o.line] || ''; if ((' ' + near + ' ').indexOf(' ' + strength) >= 0 || near.indexOf(strength) >= 0) bonus = 0.1; }
+        var total = Math.min(1, sc + bonus);
+        if (!best || total > best.score) best = { score: total, word: o.w, line: o.line };
+      });
+      if (!best) return;
+      // Prefer the batch that can be sold now and expires first (FEFO).
+      var batches = byName[k].slice().sort(function (a, b) { var ok = function (m) { return m.qty > 0 && m.days_left >= 0 ? 0 : 1; }; return ok(a) - ok(b) || String(a.expiry).localeCompare(String(b.expiry)); });
+      out.push({ med: batches[0], all: batches, score: best.score, word: best.word, line: best.line });
+    });
+    out.sort(function (a, b) { return b.score - a.score; });
+    // Lines that look like prescription items but matched nothing in stock.
+    var matchedLines = out.map(function (x) { return x.line; });
+    var unmatched = String(text).split(/\n+/).map(function (s) { return s.trim(); }).filter(function (s, i) { return /^(tab|cap|syp|syr|inj|t\.|c\.|oint|drops?)\b/i.test(s) && matchedLines.indexOf(i) < 0; });
+    return { matches: out.slice(0, 20), unmatched: unmatched.slice(0, 10) };
+  }
+  // Downscale + greyscale + contrast stretch before OCR: faster on phones and a little more accurate.
+  function prepImage(file) {
+    return new Promise(function (res, rej) {
+      var img = new Image();
+      img.onload = function () {
+        var max = 1800, sc = Math.min(1, max / Math.max(img.width, img.height));
+        if (Math.max(img.width, img.height) * sc < 1000) sc = Math.min(2, 1000 / Math.max(img.width, img.height));
+        var c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+        var g = c.getContext('2d'); g.drawImage(img, 0, 0, c.width, c.height);
+        var d = g.getImageData(0, 0, c.width, c.height), p = d.data, lo = 255, hi = 0, i, v;
+        for (i = 0; i < p.length; i += 4) { v = 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2]; p[i] = v; if (v < lo) lo = v; if (v > hi) hi = v; }
+        var span = Math.max(1, hi - lo);
+        for (i = 0; i < p.length; i += 4) { v = (p[i] - lo) * 255 / span; p[i] = p[i + 1] = p[i + 2] = v; }
+        g.putImageData(d, 0, 0);
+        URL.revokeObjectURL(img.src);
+        res(c);
+      };
+      img.onerror = function () { rej(new Error('Photo khul nahi payi. JPG/PNG photo chunein.')); };
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  function scanStatus(t, pct) {
+    $('sc-status').hidden = false; $('sc-status').textContent = t;
+    $('sc-prog').hidden = pct == null; if (pct != null) $('sc-bar').style.width = Math.round(pct * 100) + '%';
+  }
+  function runScan(file) {
+    $('sc-result').hidden = true; scanPicks = [];
+    $('sc-img').src = URL.createObjectURL(file); $('sc-prev').hidden = false;
+    scanStatus('AI tool load ho raha hai (pehli baar ~10–15 MB, phir fast)…', 0.02);
+    var medsP = api('GET', '/api/medicines').then(function (r) { state.meds = r.medicines; return r.medicines; });
+    Promise.all([loadScript(TESS), prepImage(file), medsP]).then(function (res) {
+      var canvas = res[1], meds = res[2];
+      return window.Tesseract.recognize(canvas, 'eng', {
+        logger: function (m) {
+          if (m.status === 'recognizing text') scanStatus('Parchi padh rahe hain… ' + Math.round(m.progress * 100) + '%', 0.3 + m.progress * 0.7);
+          else if (/load|initializ/.test(m.status)) scanStatus('AI tool taiyaar ho raha hai…', 0.05 + (m.progress || 0) * 0.25);
+        },
+      }).then(function (out) { return { text: out.data.text || '', conf: out.data.confidence, meds: meds }; });
+    }).then(function (r) {
+      var res = matchStock(r.text, r.meds);
+      $('sc-text').textContent = r.text.trim() || '(kuch text nahi mila)';
+      scanStatus(res.matches.length ? res.matches.length + ' dawai aapke stock se mili. Pharmacist check karke tick karein.' : 'Stock se koi dawai match nahi hui. Photo saaf/seedhi lekar dobara try karein, ya naam khud search karein.', null);
+      if (r.conf != null && r.conf < 55) $('sc-status').textContent += ' (Photo ki quality kam lag rahi hai — handwriting/blur ho sakta hai.)';
+      $('sc-matches').innerHTML = res.matches.map(function (x, i) {
+        var m = x.med, bad = m.qty <= 0 ? 'Stock khatam' : m.days_left < 0 ? 'Expired' : '';
+        var pct = Math.round(x.score * 100);
+        return '<label class="item sc-item"><input type="checkbox" data-scan="' + i + '"' + (bad || pct < 80 ? '' : ' checked') + (bad ? ' disabled' : '') + '><div class="main"><b>' + esc(m.name) + '</b>' +
+          '<small>Parchi mein: “' + esc(x.word) + '” · match ' + pct + '%</small><small>Stock ' + m.qty + (m.batch ? ' · Batch ' + esc(m.batch) : '') + ' · Exp ' + fmtDate(m.expiry) + ' · ' + money(m.price) + '</small>' +
+          (bad ? '<small style="color:#b91c1c;font-weight:700">' + bad + '</small>' : '') + '</div><div class="side"><span class="badge ' + (pct >= 90 ? 'b-green' : pct >= 80 ? 'b-amber' : 'b-grey') + '">' + (pct >= 90 ? 'Pakka' : pct >= 80 ? 'Shayad' : 'Check') + '</span></div></label>';
+      }).join('') + (res.unmatched.length ? '<div class="sc-un"><b>Parchi mein ye bhi likha hai, par stock mein nahi mila:</b><ul>' + res.unmatched.map(function (u) { return '<li>' + esc(u) + '</li>'; }).join('') + '</ul></div>' : '');
+      scanPicks = res.matches;
+      $('sc-result').hidden = false;
+      $('sc-bill').hidden = !res.matches.length;
+    }).catch(function (x) { scanStatus('Scan nahi hua: ' + (x && x.message ? x.message : 'error') + ' — dobara try karein.', null); });
+  }
+  $('sc-file').addEventListener('change', function () { var f = this.files && this.files[0]; if (f) runScan(f); this.value = ''; });
+  $('sc-bill').addEventListener('click', function () {
+    var ids = [];
+    document.querySelectorAll('#sc-matches input[data-scan]:checked').forEach(function (c) { var x = scanPicks[Number(c.dataset.scan)]; if (x) ids.push(x.med.id); });
+    if (!ids.length) { toast('Pehle dawai tick karein'); return; }
+    if (document.body.classList.contains('readonly')) { readOnlyWall(); return; }
+    state.pendingBill = ids;
+    showTab('newbill');
+  });
+  window.__dlMatch = matchStock; // used by the automated test page only
+
   function showError(x) { if (x && x.message !== 'login' && x.status !== 402) toast(x.message); }
 
   // ---------- start ----------
@@ -840,7 +1072,7 @@
     state.timer = setInterval(renderStatus, 30000);
     if (state.user.status.state === 'expired' && !sessionStorage.getItem('ro-seen')) { sessionStorage.setItem('ro-seen', '1'); setTimeout(readOnlyWall, 300); }
     var start = (location.hash || '').slice(1);
-    showTab(['plan', 'udhaar', 'purchases', 'bills', 'stock', 'refills'].indexOf(start) >= 0 ? start : 'home');
+    showTab(['plan', 'udhaar', 'purchases', 'bills', 'stock', 'refills', 'ai'].indexOf(start) >= 0 ? start : 'home');
     if (/welcome=1/.test(location.search)) { toast('Welcome! Aapka ' + ((state.config && state.config.trial_days) || 7) + '-din ka free trial shuru ho gaya.'); history.replaceState(null, '', '/app'); }
   }); }).catch(function (x) { if (x.message !== 'login') { $('loading').textContent = 'Could not load your store. Please refresh the page.'; } });
 })();

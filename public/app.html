@@ -9,6 +9,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/styles.css">
+<script src="/api-base.js"></script>
 <script src="/app.js" defer></script>
 </head>
 <body class="app-body">
@@ -21,6 +22,7 @@
   <button role="tab" data-tab="bills" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg><span>Bills</span></button>
   <button role="tab" data-tab="stock" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span>Stock</span></button>
   <button role="tab" data-tab="udhaar" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12a4 4 0 014 4v12H8a4 4 0 01-4-4z"/><path d="M9 9h6M9 13h6M12 13v4"/></svg><span>Udhaar</span></button>
+  <button role="tab" data-tab="ai" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9 17h6"/></svg><span>AI</span></button>
   <button role="tab" data-tab="more" aria-selected="false"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg><span>More</span></button>
 </nav></div>
 <main id="main" class="wrap">
@@ -72,6 +74,8 @@
         <div class="bill-totals" id="b-totals"></div>
       </div>
       <label class="check-row"><input type="checkbox" id="b-udhaar"> <span><b>Udhaar</b> — paise baad mein (customer naam zaroori)</span></label>
+      <label class="check-row" id="b-refill-row"><input type="checkbox" id="b-refill"> <span><b>🔁 Monthly dawai</b> — refill reminder lagao (customer naam + mobile zaroori) <span class="badge b-pro">PRO</span></span></label>
+      <div class="field" id="b-refill-days-f" hidden><label for="b-refill-days">Kitne din baad yaad dilayein?</label><select id="b-refill-days"><option value="7">7 din</option><option value="10">10 din</option><option value="15">15 din</option><option value="30" selected>30 din (1 mahina)</option><option value="45">45 din</option><option value="60">60 din</option><option value="90">90 din</option></select></div>
       <div class="alert alert-error" id="b-err" role="alert" hidden></div>
       <div class="bill-save"><button class="btn btn-primary btn-block" type="submit" id="b-save">Save bill / बिल सेव करें</button></div>
     </form>
@@ -148,10 +152,51 @@
     <p class="center small" style="margin-top:18px"><button class="linkbtn" type="button" id="cu-edit">Naam/mobile badlein</button> · <button class="linkbtn danger" type="button" id="cu-del">Customer delete</button></p>
   </section>
 
+  <section class="panel" id="tab-ai" role="tabpanel" hidden>
+    <div class="panel-head"><h2>🤖 AI Assistant</h2></div>
+    <p class="muted small" style="margin-top:-6px">Customer WhatsApp par order bhejein, parchi scan karke dawai dhoondhein, aur monthly patients ko refill yaad dilayein — sab free, phone se.</p>
+    <div class="ai-plan" id="ai-plan"></div>
+
+    <div class="section-card ai-card" id="ai-order">
+      <div class="ai-h"><span class="ai-ic">📲</span><div><h3>WhatsApp order link + QR</h3><small>Sab plans mein · customer link kholke dawai likhega ya parchi photo lagayega → order seedha aapke WhatsApp par</small></div></div>
+      <div id="ai-order-body" class="muted small">Link ban raha hai…</div>
+    </div>
+
+    <div class="section-card ai-card" id="ai-scan">
+      <div class="ai-h"><span class="ai-ic">📷</span><div><h3>AI parchi scan <span class="badge b-pro">PRO</span></h3><small>Parchi ki photo se dawai ke naam padhkar aapke stock se milata hai</small></div></div>
+      <div id="ai-scan-lock" hidden></div>
+      <div id="ai-scan-body">
+        <div class="alert alert-warn small ai-disc">⚠️ <b>Sirf suggestion hai — pharmacist zaroor check karein.</b> Haath se likhi (handwritten) parchi aksar sahi nahi padhi jaati; printed parchi par behtar chalta hai. Ye koi medical salah nahi deta.</div>
+        <label class="photo-pick" for="sc-file"><span>📷</span><b>Parchi ki photo lo / chuno</b><small>Photo aapke phone mein hi padhi jaati hai, kahin upload nahi hoti</small></label>
+        <input id="sc-file" type="file" accept="image/*" capture="environment" class="sr-only">
+        <div id="sc-prev" class="photo-prev" hidden><img id="sc-img" alt="Parchi"></div>
+        <div id="sc-status" class="small muted" hidden></div>
+        <div class="progress" id="sc-prog" hidden><i id="sc-bar"></i></div>
+        <div id="sc-result" hidden>
+          <h4 class="ai-sub">Stock se milti dawai</h4>
+          <div id="sc-matches" class="list"></div>
+          <div class="sc-acts"><button class="btn btn-primary btn-block" type="button" id="sc-bill">🧾 Chuni hui dawai se bill banao</button></div>
+          <details class="sc-raw"><summary>Photo se padha gaya text (check karein)</summary><pre id="sc-text"></pre></details>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-card ai-card" id="ai-refill">
+      <div class="ai-h"><span class="ai-ic">🔁</span><div><h3>Aaj ke reminders <span class="badge b-pro">PRO</span></h3><small>Monthly / chronic patients jinki dawai khatam hone wali hai</small></div></div>
+      <div id="ai-refill-lock" hidden></div>
+      <div id="ai-refill-body">
+        <div id="ai-due" class="list"></div>
+        <p class="muted small" style="margin:10px 0 0">Bill banate waqt <b>“🔁 Monthly dawai”</b> tick karein — reminder apne aap lag jayega. <button type="button" class="linkbtn" data-go="refills">Sab patients dekho →</button></p>
+      </div>
+    </div>
+    <p class="muted small">💡 Aage (Pro upgrade): WhatsApp Business API se reminder aur order reply apne aap — abhi har message aap ek tap se bhejte hain, isliye koi kharcha nahi.</p>
+  </section>
+
   <section class="panel" id="tab-more" role="tabpanel" hidden>
     <div class="panel-head"><h2>More</h2></div>
     <div class="more-list">
       <button type="button" class="more-item" data-go="purchases"><span>📦</span><b>Purchases / खरीद</b><small>Distributor bills, supplier-wise total</small></button>
+      <button type="button" class="more-item" data-go="ai"><span>🤖</span><b>AI Assistant</b><small>WhatsApp order QR, parchi scan, aaj ke reminders</small></button>
       <button type="button" class="more-item" data-go="refills"><span>💬</span><b>Refill reminders</b><small>Patients ko WhatsApp reminder</small></button>
       <button type="button" class="more-item" data-go="plan"><span>⭐</span><b>Plan &amp; store details</b><small>Basic / Pro, bill header, password</small></button>
     </div>

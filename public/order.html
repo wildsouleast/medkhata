@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dawai order karein — WhatsApp par | Dawalekh</title>
+<meta name="description" content="Apne medical store se dawai WhatsApp par order karein. Dawai ka naam likhein ya parchi ki photo bhejein.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0f766e">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/styles.css">
+<script src="/api-base.js"></script>
+<script src="/order.js" defer></script>
+</head>
+<body class="order-body">
+<header class="order-top"><div class="wrap">
+  <div class="order-store"><span class="order-ic" aria-hidden="true">💊</span><div><b id="o-store">Medical store</b><small id="o-city"></small></div></div>
+</div></header>
+<main id="main" class="wrap order-main">
+  <div id="o-loading" class="muted center" style="padding:30px 0">Store khul raha hai…</div>
+  <div id="o-missing" class="section-card" hidden><h3>Store link nahi mila</h3><p class="muted" style="margin:0">Ye link galat ya purana hai. Kripya store se naya QR / link maangein.</p></div>
+  <form id="o-form" class="form" hidden novalidate>
+    <h1 class="order-h1">Dawai order karein <span>WhatsApp par</span></h1>
+    <p class="muted small" style="margin-top:-4px">Dawai ka naam likhein ya parchi (prescription) ki photo lagayein. Store aapko WhatsApp par price aur availability batayega.</p>
+    <div class="field"><label for="o-meds">Dawai ke naam / Medicines <span class="muted">(ek line mein ek)</span></label>
+      <textarea id="o-meds" rows="5" maxlength="1500" placeholder="Jaise:&#10;Dolo 650 — 1 patta&#10;Pan 40 — 2 patta&#10;Shelcal 500 — 1 bottle"></textarea></div>
+    <div class="field"><label for="o-photo">Parchi ki photo <span class="muted">(optional)</span></label>
+      <label class="photo-pick" for="o-photo"><span>📷</span><b>Photo lo / chuno</b><small>Photo aapke phone par hi rahegi</small></label>
+      <input id="o-photo" type="file" accept="image/*" capture="environment" class="sr-only">
+      <div id="o-prev" class="photo-prev" hidden><img id="o-img" alt="Parchi ki photo"><button type="button" class="btn btn-ghost btn-sm" id="o-rm">Hatao</button></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label for="o-name">Aapka naam <span class="muted">(optional)</span></label><input id="o-name" maxlength="60" autocomplete="name"></div>
+      <div class="field"><label for="o-how">Kaise lenge?</label><select id="o-how"><option value="pickup">Store se le jaunga</option><option value="delivery">Ghar par delivery (agar ho sake)</option></select></div>
+    </div>
+    <div class="field" id="o-addr-f" hidden><label for="o-addr">Delivery address</label><textarea id="o-addr" rows="2" maxlength="250" autocomplete="street-address"></textarea></div>
+    <div class="alert alert-error" id="o-err" role="alert" hidden></div>
+    <button class="btn btn-wa btn-block order-send" type="submit">🟢 WhatsApp par order bhejo</button>
+    <div class="alert alert-info small" id="o-photo-note" hidden style="margin-top:12px">📎 WhatsApp khulne ke baad <b>parchi ki photo attach karke bhejein</b> (📎 / 📷 button se). Photo apne aap nahi jaati.</div>
+    <button class="btn btn-ghost btn-block" type="button" id="o-share" hidden style="margin-top:10px">📤 Photo + list seedha share karo</button>
+    <p class="muted small order-foot">Dawai ki salah ke liye doctor / pharmacist se baat karein. Ye page sirf order bhejne ke liye hai — aapki jaankari hum save nahi karte.<br>Powered by <a href="/">Dawalekh</a></p>
+  </form>
+</main>
+</body>
+</html>

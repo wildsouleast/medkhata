@@ -24,6 +24,25 @@ app.use((req, res, next) => {
   next();
 });
 
+
+// Own-domain frontend (GitHub Pages, e.g. https://dawalekh.publicvm.com) calls this API directly. It sends the
+// session as "Authorization: Bearer <token>" (no third-party cookies), so CORS needs no credentials.
+const CORS_ORIGINS = new Set(['https://dawalekh.publicvm.com', 'https://www.dawalekh.publicvm.com', 'https://dawalekh1.publicvm.com', 'https://dawa-lekh.publicvm.com', 'https://wildsouleast.github.io', 'http://localhost:8765']
+  .concat(String(process.env.EXTRA_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean)));
+app.use('/api', (req, res, next) => {
+  const o = req.get('origin');
+  if (o && CORS_ORIGINS.has(o)) {
+    res.set('Access-Control-Allow-Origin', o);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Token-Auth');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.set('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.set('Access-Control-Max-Age', '86400');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+  }
+  next();
+});
+
 // ---------- Razorpay webhook (needs the raw body, so it comes before express.json) ----------
 app.post('/api/razorpay/webhook', express.raw({ type: '*/*', limit: '1mb' }), async (req, res) => {
   const c = RZ.config();
@@ -120,8 +139,12 @@ function publicUser(u) {
   return { id: u.id, store_name: u.store_name, owner_name: u.owner_name, phone: u.phone, email: u.email, email_verified: Boolean(u.email && u.email_verified_at), city: u.city, store_address: u.store_address || '', gstin: u.gstin || '', drug_licence: u.drug_licence || '', created_at: u.created_at, status: accountStatus(u) };
 }
 
+function bearer(req) {
+  const m = /^Bearer\s+([A-Za-z0-9_\-.]{20,200})$/.exec(String(req.get('authorization') || ''));
+  return m ? m[1] : null;
+}
 async function loadUser(req) {
-  const token = parseCookies(req)[COOKIE];
+  const token = bearer(req) || parseCookies(req)[COOKIE];
   if (!token) return null;
   const r = await pool.query('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()', [A.tokenHash(token)]);
   return r.rows[0] || null;
@@ -159,6 +182,7 @@ async function startSession(res, userId) {
   const token = A.newToken();
   await pool.query("INSERT INTO sessions(token_hash, user_id, expires_at) VALUES ($1,$2, now() + ($3 || ' days')::interval)", [A.tokenHash(token), userId, String(SESSION_DAYS)]);
   setSessionCookie(res, token);
+  return token;
 }
 
 function str(v, max) { return String(v == null ? '' : v).trim().slice(0, max); }
@@ -236,10 +260,10 @@ app.post('/api/signup', wrap(async (req, res) => {
     "INSERT INTO users(store_name, owner_name, phone, email, city, password_hash, trial_ends_at) VALUES ($1,$2,$3,$4,$5,$6, now() + ($7 || ' hours')::interval) RETURNING *",
     [store, owner, phone, email || null, city, hash, String(TRIAL_HOURS)]
   );
-  await startSession(res, r.rows[0].id);
+  const tok = await startSession(res, r.rows[0].id);
   let emailSent = false;
   if (r.rows[0].email) emailSent = await sendVerification(r.rows[0], true).catch((e) => { console.error('[mail] signup', e.message); return false; });
-  res.status(201).json({ user: publicUser(r.rows[0]), email_sent: emailSent });
+  res.status(201).json(Object.assign({ user: publicUser(r.rows[0]), email_sent: emailSent }, req.get('x-token-auth') === '1' ? { token: tok } : {}));
 }));
 
 app.post('/api/login', wrap(async (req, res) => {
@@ -259,12 +283,12 @@ app.post('/api/login', wrap(async (req, res) => {
   }
   A.clearLimit(`login-id:${id.toLowerCase()}`);
   pool.query('DELETE FROM sessions WHERE expires_at < now()').catch(() => {});
-  await startSession(res, u.id);
-  res.json({ user: publicUser(u) });
+  const tok = await startSession(res, u.id);
+  res.json(Object.assign({ user: publicUser(u) }, req.get('x-token-auth') === '1' ? { token: tok } : {}));
 }));
 
 app.post('/api/logout', wrap(async (req, res) => {
-  const token = parseCookies(req)[COOKIE];
+  const token = bearer(req) || parseCookies(req)[COOKIE];
   if (token) await pool.query('DELETE FROM sessions WHERE token_hash=$1', [A.tokenHash(token)]);
   clearSessionCookie(res);
   res.json({ ok: true });
@@ -716,6 +740,51 @@ async function inTx(fn) {
     client.release();
   }
 }
+
+
+// ---------- AI Assistant: public WhatsApp order link ----------
+// Each store gets a random public code (not its numeric id) for /order?s=CODE. The page shows the store name and
+// opens WhatsApp to the store's order number with the customer's list prefilled. Nothing is stored for the customer.
+function newOrderCode() {
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const b = require('crypto').randomBytes(8);
+  let out = '';
+  for (let i = 0; i < 8; i++) out += abc[b[i] % abc.length];
+  return out;
+}
+async function ensureOrderCode(u) {
+  if (u.order_code) return u.order_code;
+  for (let i = 0; i < 5; i++) {
+    const code = newOrderCode();
+    try {
+      const r = await pool.query('UPDATE users SET order_code=$1 WHERE id=$2 AND order_code IS NULL RETURNING order_code', [code, u.id]);
+      if (r.rowCount) return r.rows[0].order_code;
+      const again = await pool.query('SELECT order_code FROM users WHERE id=$1', [u.id]);
+      if (again.rows[0] && again.rows[0].order_code) return again.rows[0].order_code;
+    } catch (e) { if (e.code !== '23505') throw e; }
+  }
+  throw new Error('could not make an order code');
+}
+app.get('/api/ai/order-link', requireUser, wrap(async (req, res) => {
+  const code = await ensureOrderCode(req.user);
+  res.json({ code, order_phone: req.user.order_phone || '', login_phone: req.user.phone, store_name: req.user.store_name });
+}));
+app.put('/api/ai/order-link', requireUser, requireAccess, wrap(async (req, res) => {
+  const raw = cleanPhone((req.body || {}).order_phone);
+  if (raw && !/^[6-9]\d{9}$/.test(raw)) return bad(res, 'WhatsApp number 10 digit ka hona chahiye (ya khaali chhodein — tab login wala number use hoga).', 'order_phone');
+  await pool.query('UPDATE users SET order_phone=$1 WHERE id=$2', [raw || '', req.user.id]);
+  res.json({ ok: true, order_phone: raw || '' });
+}));
+app.get('/api/public/store/:code', wrap(async (req, res) => {
+  const code = String(req.params.code || '').toLowerCase();
+  if (!/^[a-z0-9]{6,12}$/.test(code)) return res.status(404).json({ error: 'not_found', message: 'Store link sahi nahi hai.' });
+  if (A.rateLimited(`pubstore:${clientIp(req)}`, 120, 60 * 1000)) return res.status(429).json({ error: 'rate_limited', message: 'Thodi der baad try karein.' });
+  const r = await pool.query('SELECT store_name, city, store_address, phone, order_phone FROM users WHERE order_code=$1', [code]);
+  const u = r.rows[0];
+  if (!u) return res.status(404).json({ error: 'not_found', message: 'Ye store link nahi mila. Store se naya link maangein.' });
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json({ store_name: u.store_name, city: u.city, store_address: u.store_address || '', wa: '91' + (u.order_phone || u.phone) });
+}));
 
 app.get('/api/purchases', requireUser, requireAccess, wrap(async (req, res) => {
   const supplier = str(req.query.supplier, 80);
